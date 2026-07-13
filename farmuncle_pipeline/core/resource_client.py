@@ -155,14 +155,18 @@ def fetch_page(
 # under its original name (`parse_resource_1_record`) via an alias, so
 # none of its own call sites needed to change.
 # =============================================================================
-
 def parse_agmarknet_record(rec: dict) -> dict | None:
     """
     Purpose:
         Extract and lightly type-convert the fields this pipeline
-        needs from one raw government-API record (Resource 1 or
-        Resource 2 — both share this exact field shape). Field names
-        and the `DD/MM/YYYY` date format are the government API's own
+        needs from one raw government-API record (Resource 1 and
+        Resource 2 do NOT share the same field-name casing in practice
+        — Resource 1 uses lowercase keys like "commodity", Resource 2
+        uses Title_Case keys like "Commodity", "Arrival_Date",
+        "Modal_Price", confirmed against the live API's own field
+        metadata on 2026-07-13. This function looks fields up
+        case-insensitively so it works correctly for either resource).
+        The `DD/MM/YYYY` date format is the government API's own
         contract, not a per-resource design decision.
     Inputs:
         rec: one record dict from a resource's `records` list.
@@ -177,12 +181,14 @@ def parse_agmarknet_record(rec: dict) -> dict | None:
         exception, since one bad row in a page of 500 should not abort
         the page.
     """
-    commodity = (rec.get("commodity") or "").strip()
-    market = (rec.get("market") or "").strip()
-    state = (rec.get("state") or "").strip()
-    district = (rec.get("district") or "").strip() or None
-    raw_variety = (rec.get("variety") or "").strip()
-    arrival_date = rec.get("arrival_date")
+    rec_ci = {str(k).lower(): v for k, v in rec.items()}
+
+    commodity = (rec_ci.get("commodity") or "").strip()
+    market = (rec_ci.get("market") or "").strip()
+    state = (rec_ci.get("state") or "").strip()
+    district = (rec_ci.get("district") or "").strip() or None
+    raw_variety = (rec_ci.get("variety") or "").strip()
+    arrival_date = rec_ci.get("arrival_date")
 
     if not commodity or not market or not state or not arrival_date:
         return None
@@ -206,7 +212,7 @@ def parse_agmarknet_record(rec: dict) -> dict | None:
         "district": district,
         "raw_variety": raw_variety,
         "price_date": price_date,
-        "modal_price": _parse_price(rec.get("modal_price")),
-        "min_price": _parse_price(rec.get("min_price")),
-        "max_price": _parse_price(rec.get("max_price")),
+        "modal_price": _parse_price(rec_ci.get("modal_price")),
+        "min_price": _parse_price(rec_ci.get("min_price")),
+        "max_price": _parse_price(rec_ci.get("max_price")),
     }

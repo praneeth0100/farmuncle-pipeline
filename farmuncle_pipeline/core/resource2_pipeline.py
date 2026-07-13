@@ -52,10 +52,10 @@ from farmuncle_pipeline.core.batch_lifecycle import (
     complete_batch,
     complete_raw_batch,
     insert_failed_page,
-    insert_raw_api_record,
     start_batch,
     start_raw_batch,
 )
+from farmuncle_pipeline.core.raw_dedup import upsert_raw_price_entry
 from farmuncle_pipeline.core.identity_client import IdentityClient
 from farmuncle_pipeline.ingest_common import (
     ApiCallStatus,
@@ -69,7 +69,7 @@ from farmuncle_pipeline.ingest_common import (
 )
 from farmuncle_pipeline.core.price_writer import filter_rows_by_precedence, upsert_price_rows
 from farmuncle_pipeline.core.record_processor import process_records
-from farmuncle_pipeline.core.resource_client import fetch_page
+from farmuncle_pipeline.core.resource_client import fetch_page, parse_agmarknet_record
 
 # Same fixed default as live_tick.py/daily_rewrite.py — neither
 # government resource carries a per-row unit field.
@@ -180,14 +180,25 @@ def _fetch_all_resource_2_pages(
                 all_states_complete = False
                 break  # move on to the next state; don't abandon the whole date
 
-            insert_raw_api_record(
-                supabase,
-                raw_batch_id=raw_batch_id,
-                resource=Resource.RESOURCE_2,
-                page_number=total_pages,
-                raw_payload={"state": state, "response": result.raw_response},
-                parser_version=PARSER_VERSION,
-            )
+            for rec in result.records:
+                parsed = parse_agmarknet_record(rec)
+                if parsed is None:
+                    continue
+                upsert_raw_price_entry(
+                    supabase,
+                    resource=Resource.RESOURCE_2.value,
+                    market=parsed["market"],
+                    state=parsed["state"],
+                    district=parsed["district"],
+                    commodity=parsed["commodity"],
+                    raw_variety=parsed["raw_variety"],
+                    price_date=parsed["price_date"],
+                    modal_price=parsed["modal_price"],
+                    min_price=parsed["min_price"],
+                    max_price=parsed["max_price"],
+                    batch_id=raw_batch_id,
+                    parser_version=PARSER_VERSION,
+                )
             records.extend(result.records)
             state_had_success = True
 

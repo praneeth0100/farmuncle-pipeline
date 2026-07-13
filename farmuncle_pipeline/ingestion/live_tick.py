@@ -87,10 +87,10 @@ from farmuncle_pipeline.core.batch_lifecycle import (
     complete_batch,
     complete_raw_batch,
     insert_failed_page,
-    insert_raw_api_record,
     start_batch,
     start_raw_batch,
 )
+from farmuncle_pipeline.core.raw_dedup import upsert_raw_price_entry
 from farmuncle_pipeline.core.identity_client import IdentityClient
 from farmuncle_pipeline.ingest_common import (
     ApiCallStatus,
@@ -105,8 +105,7 @@ from farmuncle_pipeline.ingest_common import (
 )
 from farmuncle_pipeline.core.price_writer import filter_rows_by_precedence, upsert_price_rows
 from farmuncle_pipeline.core.record_processor import process_records
-from farmuncle_pipeline.core.resource_client import PageFetchResult, fetch_page
-
+from farmuncle_pipeline.core.resource_client import PageFetchResult, fetch_page, parse_agmarknet_record
 JOB_NAME = "live_tick"
 
 # Government Resource 1/2 responses carry no per-row unit field (see
@@ -212,14 +211,25 @@ def _fetch_all_resource_1_pages(
             complete = False
             break
 
-        insert_raw_api_record(
-            supabase,
-            raw_batch_id=raw_batch_id,
-            resource=Resource.RESOURCE_1,
-            page_number=page_number,
-            raw_payload=result.raw_response,
-            parser_version=PARSER_VERSION,
-        )
+        for rec in result.records:
+            parsed = parse_agmarknet_record(rec)
+            if parsed is None:
+                continue
+            upsert_raw_price_entry(
+                supabase,
+                resource=Resource.RESOURCE_1.value,
+                market=parsed["market"],
+                state=parsed["state"],
+                district=parsed["district"],
+                commodity=parsed["commodity"],
+                raw_variety=parsed["raw_variety"],
+                price_date=parsed["price_date"],
+                modal_price=parsed["modal_price"],
+                min_price=parsed["min_price"],
+                max_price=parsed["max_price"],
+                batch_id=raw_batch_id,
+                parser_version=PARSER_VERSION,
+            )
         records.extend(result.records)
 
         if len(result.records) < runtime.page_size:

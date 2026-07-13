@@ -1,0 +1,182 @@
+warning: in the working copy of 'farmuncle_pipeline/core/resource2_pipeline.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'farmuncle_pipeline/ingestion/live_tick.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'farmuncle_pipeline/ingestion/retry_failed_pages.py', LF will be replaced by CRLF the next time Git touches it
+[1mdiff --git a/farmuncle_pipeline/core/resource2_pipeline.py b/farmuncle_pipeline/core/resource2_pipeline.py[m
+[1mindex dcf4bf6..8b92cd8 100644[m
+[1m--- a/farmuncle_pipeline/core/resource2_pipeline.py[m
+[1m+++ b/farmuncle_pipeline/core/resource2_pipeline.py[m
+[36m@@ -52,10 +52,10 @@[m [mfrom farmuncle_pipeline.core.batch_lifecycle import ([m
+     complete_batch,[m
+     complete_raw_batch,[m
+     insert_failed_page,[m
+[31m-    insert_raw_api_record,[m
+     start_batch,[m
+     start_raw_batch,[m
+ )[m
+[32m+[m[32mfrom farmuncle_pipeline.core.raw_dedup import upsert_raw_price_entry[m
+ from farmuncle_pipeline.core.identity_client import IdentityClient[m
+ from farmuncle_pipeline.ingest_common import ([m
+     ApiCallStatus,[m
+[36m@@ -69,7 +69,7 @@[m [mfrom farmuncle_pipeline.ingest_common import ([m
+ )[m
+ from farmuncle_pipeline.core.price_writer import filter_rows_by_precedence, upsert_price_rows[m
+ from farmuncle_pipeline.core.record_processor import process_records[m
+[31m-from farmuncle_pipeline.core.resource_client import fetch_page[m
+[32m+[m[32mfrom farmuncle_pipeline.core.resource_client import fetch_page, parse_agmarknet_record[m
+ [m
+ # Same fixed default as live_tick.py/daily_rewrite.py — neither[m
+ # government resource carries a per-row unit field.[m
+[36m@@ -180,14 +180,25 @@[m [mdef _fetch_all_resource_2_pages([m
+                 all_states_complete = False[m
+                 break  # move on to the next state; don't abandon the whole date[m
+ [m
+[31m-            insert_raw_api_record([m
+[31m-                supabase,[m
+[31m-                raw_batch_id=raw_batch_id,[m
+[31m-                resource=Resource.RESOURCE_2,[m
+[31m-                page_number=total_pages,[m
+[31m-                raw_payload={"state": state, "response": result.raw_response},[m
+[31m-                parser_version=PARSER_VERSION,[m
+[31m-            )[m
+[32m+[m[32m            for rec in result.records:[m
+[32m+[m[32m                parsed = parse_agmarknet_record(rec)[m
+[32m+[m[32m                if parsed is None:[m
+[32m+[m[32m                    continue[m
+[32m+[m[32m                upsert_raw_price_entry([m
+[32m+[m[32m                    supabase,[m
+[32m+[m[32m                    resource=Resource.RESOURCE_2.value,[m
+[32m+[m[32m                    market=parsed["market"],[m
+[32m+[m[32m                    state=parsed["state"],[m
+[32m+[m[32m                    district=parsed["district"],[m
+[32m+[m[32m                    commodity=parsed["commodity"],[m
+[32m+[m[32m                    raw_variety=parsed["raw_variety"],[m
+[32m+[m[32m                    price_date=parsed["price_date"],[m
+[32m+[m[32m                    modal_price=parsed["modal_price"],[m
+[32m+[m[32m                    min_price=parsed["min_price"],[m
+[32m+[m[32m                    max_price=parsed["max_price"],[m
+[32m+[m[32m                    batch_id=raw_batch_id,[m
+[32m+[m[32m                    parser_version=PARSER_VERSION,[m
+[32m+[m[32m                )[m
+             records.extend(result.records)[m
+             state_had_success = True[m
+ [m
+[1mdiff --git a/farmuncle_pipeline/ingestion/live_tick.py b/farmuncle_pipeline/ingestion/live_tick.py[m
+[1mindex f0fdce5..48930f4 100644[m
+[1m--- a/farmuncle_pipeline/ingestion/live_tick.py[m
+[1m+++ b/farmuncle_pipeline/ingestion/live_tick.py[m
+[36m@@ -87,10 +87,10 @@[m [mfrom farmuncle_pipeline.core.batch_lifecycle import ([m
+     complete_batch,[m
+     complete_raw_batch,[m
+     insert_failed_page,[m
+[31m-    insert_raw_api_record,[m
+     start_batch,[m
+     start_raw_batch,[m
+ )[m
+[32m+[m[32mfrom farmuncle_pipeline.core.raw_dedup import upsert_raw_price_entry[m
+ from farmuncle_pipeline.core.identity_client import IdentityClient[m
+ from farmuncle_pipeline.ingest_common import ([m
+     ApiCallStatus,[m
+[36m@@ -105,8 +105,7 @@[m [mfrom farmuncle_pipeline.ingest_common import ([m
+ )[m
+ from farmuncle_pipeline.core.price_writer import filter_rows_by_precedence, upsert_price_rows[m
+ from farmuncle_pipeline.core.record_processor import process_records[m
+[31m-from farmuncle_pipeline.core.resource_client import PageFetchResult, fetch_page[m
+[31m-[m
+[32m+[m[32mfrom farmuncle_pipeline.core.resource_client import PageFetchResult, fetch_page, parse_agmarknet_record[m
+ JOB_NAME = "live_tick"[m
+ [m
+ # Government Resource 1/2 responses carry no per-row unit field (see[m
+[36m@@ -212,14 +211,25 @@[m [mdef _fetch_all_resource_1_pages([m
+             complete = False[m
+             break[m
+ [m
+[31m-        insert_raw_api_record([m
+[31m-            supabase,[m
+[31m-            raw_batch_id=raw_batch_id,[m
+[31m-            resource=Resource.RESOURCE_1,[m
+[31m-            page_number=page_number,[m
+[31m-            raw_payload=result.raw_response,[m
+[31m-            parser_version=PARSER_VERSION,[m
+[31m-        )[m
+[32m+[m[32m        for rec in result.records:[m
+[32m+[m[32m            parsed = parse_agmarknet_record(rec)[m
+[32m+[m[32m            if parsed is None:[m
+[32m+[m[32m                continue[m
+[32m+[m[32m            upsert_raw_price_entry([m
+[32m+[m[32m                supabase,[m
+[32m+[m[32m                resource=Resource.RESOURCE_1.value,[m
+[32m+[m[32m                market=parsed["market"],[m
+[32m+[m[32m                state=parsed["state"],[m
+[32m+[m[32m                district=parsed["district"],[m
+[32m+[m[32m                commodity=parsed["commodity"],[m
+[32m+[m[32m                raw_variety=parsed["raw_variety"],[m
+[32m+[m[32m                price_date=parsed["price_date"],[m
+[32m+[m[32m                modal_price=parsed["modal_price"],[m
+[32m+[m[32m                min_price=parsed["min_price"],[m
+[32m+[m[32m                max_price=parsed["max_price"],[m
+[32m+[m[32m                batch_id=raw_batch_id,[m
+[32m+[m[32m                parser_version=PARSER_VERSION,[m
+[32m+[m[32m            )[m
+         records.extend(result.records)[m
+ [m
+         if len(result.records) < runtime.page_size:[m
+[1mdiff --git a/farmuncle_pipeline/ingestion/retry_failed_pages.py b/farmuncle_pipeline/ingestion/retry_failed_pages.py[m
+[1mindex 08d845d..489d3ba 100644[m
+[1m--- a/farmuncle_pipeline/ingestion/retry_failed_pages.py[m
+[1m+++ b/farmuncle_pipeline/ingestion/retry_failed_pages.py[m
+[36m@@ -78,10 +78,10 @@[m [mfrom farmuncle_pipeline.core.batch_lifecycle import ([m
+     RawApiBatchHandle,[m
+     complete_batch,[m
+     complete_raw_batch,[m
+[31m-    insert_raw_api_record,[m
+     start_batch,[m
+     start_raw_batch,[m
+ )[m
+[32m+[m[32mfrom farmuncle_pipeline.core.raw_dedup import upsert_raw_price_entry[m
+ from farmuncle_pipeline.core.identity_client import IdentityClient[m
+ from farmuncle_pipeline.ingest_common import ([m
+     ApiCallStatus,[m
+[36m@@ -98,7 +98,7 @@[m [mfrom farmuncle_pipeline.ingest_common import ([m
+ )[m
+ from farmuncle_pipeline.core.price_writer import filter_rows_by_precedence, upsert_price_rows[m
+ from farmuncle_pipeline.core.record_processor import process_records[m
+[31m-from farmuncle_pipeline.core.resource_client import fetch_page[m
+[32m+[m[32mfrom farmuncle_pipeline.core.resource_client import fetch_page, parse_agmarknet_record[m
+ [m
+ JOB_NAME = "retry_failed_pages"[m
+ [m
+[36m@@ -293,15 +293,25 @@[m [mdef run_retry_failed_pages(ctx) -> None:[m
+                 raw_batches[resource_enum] = raw_batch[m
+                 raw_batch_stats[resource_enum] = {"pages": 0, "records": 0}[m
+ [m
+[31m-            raw_payload = {"state": state, "response": result.raw_response} if state else result.raw_response[m
+[31m-            insert_raw_api_record([m
+[31m-                supabase,[m
+[31m-                raw_batch_id=raw_batch.id,[m
+[31m-                resource=resource_enum,[m
+[31m-                page_number=fp["page"],[m
+[31m-                raw_payload=raw_payload,[m
+[31m-                parser_version=PARSER_VERSION,[m
+[31m-            )[m
+[32m+[m[32m            for rec in result.records:[m
+[32m+[m[32m                parsed = parse_agmarknet_record(rec)[m
+[32m+[m[32m                if parsed is None:[m
+[32m+[m[32m                    continue[m
+[32m+[m[32m                upsert_raw_price_entry([m
+[32m+[m[32m                    supabase,[m
+[32m+[m[32m                    resource=resource_enum.value,[m
+[32m+[m[32m                    market=parsed["market"],[m
+[32m+[m[32m                    state=parsed["state"],[m
+[32m+[m[32m                    district=parsed["district"],[m
+[32m+[m[32m                    commodity=parsed["commodity"],[m
+[32m+[m[32m                    raw_variety=parsed["raw_variety"],[m
+[32m+[m[32m                    price_date=parsed["price_date"],[m
+[32m+[m[32m                    modal_price=parsed["modal_price"],[m
+[32m+[m[32m                    min_price=parsed["min_price"],[m
+[32m+[m[32m                    max_price=parsed["max_price"],[m
+[32m+[m[32m                    batch_id=raw_batch.id,[m
+[32m+[m[32m                    parser_version=PARSER_VERSION,[m
+[32m+[m[32m                )[m
+             raw_batch_stats[resource_enum]["pages"] += 1[m
+             raw_batch_stats[resource_enum]["records"] += len(result.records)[m
+ [m

@@ -78,10 +78,10 @@ from farmuncle_pipeline.core.batch_lifecycle import (
     RawApiBatchHandle,
     complete_batch,
     complete_raw_batch,
-    insert_raw_api_record,
     start_batch,
     start_raw_batch,
 )
+from farmuncle_pipeline.core.raw_dedup import upsert_raw_price_entry
 from farmuncle_pipeline.core.identity_client import IdentityClient
 from farmuncle_pipeline.ingest_common import (
     ApiCallStatus,
@@ -98,7 +98,7 @@ from farmuncle_pipeline.ingest_common import (
 )
 from farmuncle_pipeline.core.price_writer import filter_rows_by_precedence, upsert_price_rows
 from farmuncle_pipeline.core.record_processor import process_records
-from farmuncle_pipeline.core.resource_client import fetch_page
+from farmuncle_pipeline.core.resource_client import fetch_page, parse_agmarknet_record
 
 JOB_NAME = "retry_failed_pages"
 
@@ -293,15 +293,25 @@ def run_retry_failed_pages(ctx) -> None:
                 raw_batches[resource_enum] = raw_batch
                 raw_batch_stats[resource_enum] = {"pages": 0, "records": 0}
 
-            raw_payload = {"state": state, "response": result.raw_response} if state else result.raw_response
-            insert_raw_api_record(
-                supabase,
-                raw_batch_id=raw_batch.id,
-                resource=resource_enum,
-                page_number=fp["page"],
-                raw_payload=raw_payload,
-                parser_version=PARSER_VERSION,
-            )
+            for rec in result.records:
+                parsed = parse_agmarknet_record(rec)
+                if parsed is None:
+                    continue
+                upsert_raw_price_entry(
+                    supabase,
+                    resource=resource_enum.value,
+                    market=parsed["market"],
+                    state=parsed["state"],
+                    district=parsed["district"],
+                    commodity=parsed["commodity"],
+                    raw_variety=parsed["raw_variety"],
+                    price_date=parsed["price_date"],
+                    modal_price=parsed["modal_price"],
+                    min_price=parsed["min_price"],
+                    max_price=parsed["max_price"],
+                    batch_id=raw_batch.id,
+                    parser_version=PARSER_VERSION,
+                )
             raw_batch_stats[resource_enum]["pages"] += 1
             raw_batch_stats[resource_enum]["records"] += len(result.records)
 

@@ -55,7 +55,7 @@ from farmuncle_pipeline.core.batch_lifecycle import (
     start_batch,
     start_raw_batch,
 )
-from farmuncle_pipeline.core.raw_dedup import upsert_raw_price_entry
+from farmuncle_pipeline.core.raw_dedup import upsert_raw_price_entries_batch
 from farmuncle_pipeline.core.identity_client import IdentityClient
 from farmuncle_pipeline.ingest_common import (
     ApiCallStatus,
@@ -180,25 +180,20 @@ def _fetch_all_resource_2_pages(
                 all_states_complete = False
                 break  # move on to the next state; don't abandon the whole date
 
-            for rec in result.records:
-                parsed = parse_agmarknet_record(rec)
-                if parsed is None:
-                    continue
-                upsert_raw_price_entry(
-                    supabase,
-                    resource=Resource.RESOURCE_2.value,
-                    market=parsed["market"],
-                    state=parsed["state"],
-                    district=parsed["district"],
-                    commodity=parsed["commodity"],
-                    raw_variety=parsed["raw_variety"],
-                    price_date=parsed["price_date"],
-                    modal_price=parsed["modal_price"],
-                    min_price=parsed["min_price"],
-                    max_price=parsed["max_price"],
-                    batch_id=raw_batch_id,
-                    parser_version=PARSER_VERSION,
-                )
+            # Batched raw-dedup write (2026-07-13 fix) — see
+            # raw_dedup.upsert_raw_price_entries_batch's docstring.
+            parsed_page = [
+                parsed
+                for parsed in (parse_agmarknet_record(rec) for rec in result.records)
+                if parsed is not None
+            ]
+            upsert_raw_price_entries_batch(
+                supabase,
+                resource=Resource.RESOURCE_2.value,
+                batch_id=raw_batch_id,
+                parser_version=PARSER_VERSION,
+                parsed_records=parsed_page,
+            )
             records.extend(result.records)
             state_had_success = True
 

@@ -111,3 +111,87 @@ def upsert_raw_price_entry(
 
     row = result.data[0]
     return row["entry_id"], row["is_new"]
+
+
+def upsert_raw_price_entries_batch(
+    supabase,
+    *,
+    resource: str,
+    batch_id: str,
+    parser_version: int,
+    parsed_records: list[dict],
+) -> tuple[int, int]:
+    """
+    Insert-or-touch an entire page's worth of raw price observations in
+    a single round-trip, instead of one RPC call per record.
+
+    Root-cause fix (2026-07-13 incident): the original per-record
+    `upsert_raw_price_entry` loop in live_tick.py /
+    resource2_pipeline.py / retry_failed_pages.py made ~500 sequential
+    RPC round-trips per page (~280ms each => ~2m20s/page), which blew
+    GitHub Actions' 15-minute job timeout on any run needing more than
+    ~6 pages, SIGKILLing the process mid-run and leaving a stale
+    RUNNING row in `ingestion_batches` that then blocked every
+    subsequent run via the §12 concurrency guard. This function
+    batches the whole page into one call to the
+    `upsert_raw_price_entries_batch` Postgres RPC (one
+    INSERT ... ON CONFLICT DO UPDATE statement), cutting a page's raw
+    writes from N round-trips to 1.
+
+    Inputs:
+        resource: "resource_1" or "resource_2" (pass Resource.X.value).
+        batch_id: the current run's `raw_api_batches.id`
+            (`raw_batch_id` in the calling scripts).
+        parser_version: `PARSER_VERSION` from `ingest_common`.
+        parsed_records: a list of dicts, each shaped like
+            `parse_agmarknet_record`'s return value (market, state,
+            district, commodity, raw_variety, price_date, modal_price,
+            min_price, max_price). Callers should skip `None` results
+            from `parse_agmarknet_record` before building this list.
+            If empty, this function is a no-op and makes no RPC call.
+
+    Outputs:
+        (rows_written, rows_new) -- rows_written is the number of
+        distinct (key, content) combinations in this page after
+        within-page deduplication (a page can legitimately contain the
+        same record twice); rows_new is how many of those were never
+        seen before across any batch (is_new=True).
+
+    Failure modes:
+        Raises whatever the Supabase client raises on RPC failure --
+        same policy as `upsert_raw_price_entry`, not swallowed.
+    """
+    if not parsed_records:
+        return 0, 0
+
+    entries = []
+    for parsed in parsed_records:
+        payload = {
+            "modal_price": parsed["modal_price"],
+            "min_price": parsed["min_price"],
+            "max_price": parsed["max_price"],
+        }
+        entries.append(
+            {
+                "resource": resource,
+                "market": parsed["market"],
+                "state": parsed["state"],
+                "district": parsed["district"] or "",
+                "commodity": parsed["commodity"],
+                "raw_variety": parsed["raw_variety"] or "",
+                "price_date": parsed["price_date"],
+                "content_hash": _content_hash(payload),
+                "payload": payload,
+                "batch_id": batch_id,
+                "parser_version": parser_version,
+            }
+        )
+
+    result = supabase.rpc(
+        "upsert_raw_price_entries_batch",
+        {"p_entries": entries},
+    ).execute()
+
+    rows = result.data or []
+    rows_new = sum(1 for r in rows if r["is_new"])
+    return len(rows), rows_new

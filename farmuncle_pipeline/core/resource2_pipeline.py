@@ -141,8 +141,8 @@ def _fetch_all_resource_2_pages(
                 "format": "json",
                 "limit": runtime.page_size,
                 "offset": offset,
-                "filters[arrival_date]": date_str,
-                "filters[state]": state,
+                "filters[Arrival_Date]": date_str,
+                "filters[State]": state,
             }
             result = fetch_page(
                 url=runtime.api_base_resource_2,

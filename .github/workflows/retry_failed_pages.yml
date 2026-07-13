@@ -1,0 +1,45 @@
+name: retry_failed_pages
+
+# Reconstructs and retries every PENDING failed_pages row, completing
+# the full pipeline on success (Master Build Spec §21 Step 17).
+#
+# Twice daily, offset from both live_tick and daily_rewrite to avoid
+# contending for the same government API windows:
+#   - 06:00 UTC (11:30 IST) — catches overnight live_tick failures
+#   - 16:00 UTC (21:30 IST) — ~1h after daily_rewrite (14:30 UTC),
+#     giving that run its full §24 <30min budget to finish and close
+#     out its own failed_pages rows before this tries them.
+on:
+  schedule:
+    - cron: "0 6 * * *"
+    - cron: "0 16 * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: retry-failed-pages
+  cancel-in-progress: false # see live_tick.yml for why
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      - name: Run retry_failed_pages
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DATA_GOV_API_KEY: ${{ secrets.DATA_GOV_API_KEY }}
+          HISTORY_SUPABASE_URL: ${{ secrets.HISTORY_SUPABASE_URL }}
+          HISTORY_SUPABASE_SERVICE_KEY: ${{ secrets.HISTORY_SUPABASE_SERVICE_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: python -m farmuncle_pipeline.ingestion.retry_failed_pages

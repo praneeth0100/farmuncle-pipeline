@@ -1,0 +1,43 @@
+name: live_tick
+
+# Resource 1, today-only, every 3h (Master Build Spec §9/§21 Step 14).
+on:
+  schedule:
+    # UTC. Every 3 hours on the hour: 00:00, 03:00, 06:00, 09:00, 12:00, 15:00, 18:00, 21:00.
+    - cron: "0 */3 * * *"
+  workflow_dispatch: {} # manual trigger, for testing/ops
+
+concurrency:
+  group: live-tick
+  # Do NOT cancel an in-progress run: a cancelled run is SIGKILLed before
+  # its own except-block can close ingestion_batches out of RUNNING,
+  # which would leave a stale row blocking every future run via the §12
+  # concurrency guard. Queuing (not cancelling) is the safe choice —
+  # by the time a queued run starts, the prior one has already closed
+  # its batch, so there's no conflict left to hit anyway.
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15 # §24 target is <5 min; generous margin before treating it as hung
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      - name: Run live_tick
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DATA_GOV_API_KEY: ${{ secrets.DATA_GOV_API_KEY }}
+          HISTORY_SUPABASE_URL: ${{ secrets.HISTORY_SUPABASE_URL }}
+          HISTORY_SUPABASE_SERVICE_KEY: ${{ secrets.HISTORY_SUPABASE_SERVICE_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: python -m farmuncle_pipeline.ingestion.live_tick

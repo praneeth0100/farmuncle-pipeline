@@ -1,0 +1,1 @@
+Drop `FarmUncle_v2_Master_Build_Spec.md` and any ADRs here. Not auto-populated by this restructure since it's your own document from earlier in the build session — just save it from chat into this folder.

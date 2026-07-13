@@ -1,0 +1,47 @@
+name: daily_rewrite
+
+# Resource 2, evening-finalized, §8 precedence, §16 outage alert
+# (Master Build Spec §9/§21 Step 15).
+#
+# Scheduled for 20:00 IST daily. GitHub Actions cron is UTC-only;
+# IST = UTC+5:30, so 20:00 IST = 14:30 UTC. This is what settles the
+# "which day does daily_rewrite target" assumption noted in that
+# script's own docstring: by 20:00 IST, that day's Resource 2 data is
+# expected to be evening-finalized (§8/§9), so `daily_rewrite.py`'s
+# `datetime.now(_IST).date()` will correctly resolve to the day that
+# just finished, not a stale one. If Resource 2's actual finalization
+# time turns out to be later than 20:00 IST in practice, move this
+# cron later rather than changing the script's date logic.
+on:
+  schedule:
+    - cron: "30 14 * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: daily-rewrite
+  cancel-in-progress: false # see live_tick.yml for why
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45 # §24 target is <30 min; margin before treating it as hung
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      - name: Run daily_rewrite
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DATA_GOV_API_KEY: ${{ secrets.DATA_GOV_API_KEY }}
+          HISTORY_SUPABASE_URL: ${{ secrets.HISTORY_SUPABASE_URL }}
+          HISTORY_SUPABASE_SERVICE_KEY: ${{ secrets.HISTORY_SUPABASE_SERVICE_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: python -m farmuncle_pipeline.ingestion.daily_rewrite

@@ -1,0 +1,56 @@
+name: historical_backfill
+
+# Resource 2 over an operator-specified historical date range (Master
+# Build Spec §21 Step 16). Manual-only — this script processes past,
+# already-closed days on demand; it has no natural recurring schedule
+# the way live_tick/daily_rewrite do.
+on:
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: "Start date, inclusive (YYYY-MM-DD)"
+        required: true
+      end_date:
+        description: "End date, inclusive (YYYY-MM-DD). Leave blank for a single day = start_date."
+        required: false
+
+concurrency:
+  group: historical-backfill
+  cancel-in-progress: false # see live_tick.yml for why — mid-run cancellation
+  # would abandon whatever date the loop is currently on with its batch
+  # rows correctly closed, but should still be avoided so as not to
+  # interrupt a long-running multi-week backfill unnecessarily.
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    # §24 target is <10 min per week — no fixed cap here since range size
+    # varies entirely by operator input; GitHub's own 6h job ceiling applies.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      - name: Run historical_backfill
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DATA_GOV_API_KEY: ${{ secrets.DATA_GOV_API_KEY }}
+          HISTORY_SUPABASE_URL: ${{ secrets.HISTORY_SUPABASE_URL }}
+          HISTORY_SUPABASE_SERVICE_KEY: ${{ secrets.HISTORY_SUPABASE_SERVICE_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          if [ -n "${{ github.event.inputs.end_date }}" ]; then
+            python -m farmuncle_pipeline.ingestion.historical_backfill \
+              --start-date "${{ github.event.inputs.start_date }}" \
+              --end-date "${{ github.event.inputs.end_date }}"
+          else
+            python -m farmuncle_pipeline.ingestion.historical_backfill \
+              --start-date "${{ github.event.inputs.start_date }}"
+          fi

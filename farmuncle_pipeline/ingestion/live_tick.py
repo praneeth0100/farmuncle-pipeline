@@ -27,6 +27,23 @@ Precedence note (§8):
     same-day rows across resources is `daily_rewrite`'s job description
     ("honors §8 precedence"), not this script's.
 
+Per-state pagination (2026-07-14 fix — see `_fetch_all_resource_1_pages`):
+    Originally fetched nationwide in one continuous offset stream,
+    filtered only by `filters[arrival_date]`. Confirmed in production
+    on 2026-07-13 that this was silently truncating data: the
+    government API's Elasticsearch backend enforces
+    `index.max_result_window = 10000` (confirmed via a direct 500
+    error reproducing the failure), and the real nationwide total for
+    that date was 18,700 records against a captured 10,000 — a 46%
+    silent daily loss, logged as a clean SUCCESS. Fixed by paginating
+    once per state (`filters[state.keyword]`, confirmed via the
+    resource's own Swagger docs — a different field name than
+    Resource 2's `filters[State]`), mirroring the per-state pattern
+    `resource2_pipeline.py` already used for Resource 2, plus a
+    per-state reconciliation against the `total` field the government
+    API itself reports (tagged `QUALITY-001`, §7) in case any single
+    state ever approaches the same ceiling.
+
 What this script deliberately does NOT do (see reasoning inline / in
 imported modules):
     - Call `refresh_price_cache` — that RPC and its `price_cache` table
@@ -46,6 +63,11 @@ imported modules):
       (Step 17)'s job, per invariant 6 ("every failed API page is
       persisted in a table, never a local file") and §5's module
       structure (retry is its own script, not folded into live_tick).
+    - Write a `QUALITY-001` coverage mismatch to `failed_pages` — that
+      table's retry model ("re-fetch this exact page") doesn't fix a
+      coverage gap, since the missing records never fit in any single
+      page to begin with. Surfaced as a loud print + a PARTIAL batch
+      status instead; belongs in `quality_alerts` once Step 19 exists.
 
 Provenance — what was reused from the v1 reference scripts and why:
     - Resource 1's field names (`commodity`, `market`, `state`,
@@ -71,7 +93,9 @@ Provenance — what was reused from the v1 reference scripts and why:
     price truncation (prices are stored as `numeric` in the live
     schema — truncating to `int` would silently lose precision, so
     this script keeps them as `float`); v1's field name `date` for the
-    price-date column (the live schema calls it `price_date`).
+    price-date column (the live schema calls it `price_date`); v1's
+    single nationwide fetch stream (replaced 2026-07-14 by per-state
+    pagination — see note above).
 """
 
 from __future__ import annotations
@@ -99,6 +123,7 @@ from farmuncle_pipeline.ingest_common import (
     PARSER_VERSION,
     Resource,
     Source,
+    STATES,
     log_api_call,
     time_api_call,
     validate_startup,
@@ -129,112 +154,156 @@ _RAW_UNIT_DEFAULT = "kg"
 
 def _fetch_all_resource_1_pages(
     *, supabase, batch_id: str, raw_batch_id: str, date_str: str, api_key: str, runtime
-) -> tuple[list, bool, int]:
+) -> tuple[list, bool, int, int]:
     """
     Purpose:
-        Page through Resource 1 for a single date until pagination
-        genuinely ends or a page fails after exhausting retries.
-        Writes one `api_call_logs` row and, on success, one
-        `raw_api_records` row per page fetched (invariant 1: raw
-        payloads are immutable and written as-is).
+        Page through Resource 1, once per state in `STATES`, for a
+        single date, accumulating every state's records. Writes one
+        `api_call_logs` row per page and, on success, a batched
+        `raw_price_entries` upsert per page (invariant 1: raw content
+        is immutable and written as-is; dedup only ever touches
+        `last_seen_batch_id`/`last_seen_at` on already-known content,
+        never a payload).
+
+        Changed 2026-07-14 from a single nationwide offset stream —
+        see this module's docstring for why (confirmed 46% silent
+        daily data loss from the government API's Elasticsearch
+        `max_result_window` ceiling). Also reconciles each state's
+        actually-collected record count against the `total` field the
+        government API itself reports per response (confirmed present
+        and reliable — e.g. `"total": 18700` nationwide, `"total": 576`
+        for Karnataka alone, both verified against real responses on
+        2026-07-13). A mismatch here means truncation happened even
+        within one state's own pagination — tagged `QUALITY-001`
+        ("Coverage mismatch", §7).
     Inputs:
         supabase: an already-constructed client.
         batch_id: `ingestion_batches.id` for `api_call_logs`/
             `failed_pages` correlation.
-        raw_batch_id: `raw_api_batches.id` for `raw_api_records`
+        raw_batch_id: `raw_api_batches.id` for `raw_price_entries`
             correlation.
         date_str: today's date as `DD/MM/YYYY` (Resource 1's expected
             `filters[arrival_date]` format).
         api_key: `ctx.secrets.data_gov_api_key`.
         runtime: `ctx.app_config.runtime`.
     Outputs:
-        3-tuple: (all records fetched across all successful pages,
-        whether pagination completed cleanly, number of pages
-        attempted).
+        4-tuple: (all records fetched across every state's successful
+        pages, whether every state's pagination completed cleanly AND
+        reconciled against the government's own reported total, total
+        pages attempted across all states, number of states that
+        produced at least one successful page).
     Failure modes:
         None raised directly — a page-level failure is recorded (see
-        `insert_failed_page`) and reflected in the returned `bool`
+        `insert_failed_page`) and a coverage mismatch is only logged
+        (see module docstring for why it isn't written to
+        `failed_pages`); both are reflected in the returned `bool`
         rather than raised, so a partial day's data is still ingested
         instead of being discarded wholesale.
     """
     records: list = []
-    offset = 0
-    page_number = 0
-    complete = True
+    all_states_complete = True
+    total_pages = 0
+    states_with_any_success = 0
 
-    while True:
-        page_number += 1
-        params = {
-            "api-key": api_key,
-            "format": "json",
-            "limit": runtime.page_size,
-            "offset": offset,
-            "filters[arrival_date]": date_str,
-        }
-        result = fetch_page(
-            url=runtime.api_base_resource_1,
-            params=params,
-            headers=DEFAULT_HTTP_HEADERS,
-            timeout=runtime.api_timeout_seconds,
-            max_retries=runtime.max_retries,
-            retry_delay_seconds=runtime.retry_delay_seconds,
-        )
+    for state in STATES:
+        offset = 0
+        page_in_state = 0
+        state_record_count = 0
+        state_had_success = False
+        reported_total = None
 
-        log_api_call(
-            supabase,
-            batch_id=batch_id,
-            job_name=JOB_NAME,
-            resource=Resource.RESOURCE_1,
-            duration_ms=result.duration_ms,
-            status=ApiCallStatus.SUCCESS if result.ok else ApiCallStatus.FAILURE,
-            page=page_number,
-            rows=len(result.records) if result.ok else None,
-            # INGEST-001 (API timeout) is the closest §7 code for an
-            # api_call_logs-level failure, whatever its exact cause
-            # (timeout or connection error) — §7 defines no separate
-            # "connection error" code.
-            error_code=None if result.ok else "INGEST-001",
-        )
+        while True:
+            page_in_state += 1
+            total_pages += 1
+            params = {
+                "api-key": api_key,
+                "format": "json",
+                "limit": runtime.page_size,
+                "offset": offset,
+                "filters[arrival_date]": date_str,
+                "filters[state.keyword]": state,
+            }
+            result = fetch_page(
+                url=runtime.api_base_resource_1,
+                params=params,
+                headers=DEFAULT_HTTP_HEADERS,
+                timeout=runtime.api_timeout_seconds,
+                max_retries=runtime.max_retries,
+                retry_delay_seconds=runtime.retry_delay_seconds,
+            )
 
-        if not result.ok:
-            # This is the §9 fix in effect: an exhausted-retries page
-            # is recorded explicitly (INGEST-002: pagination failure)
-            # rather than silently treated as "pagination ended here".
-            insert_failed_page(
+            log_api_call(
                 supabase,
                 batch_id=batch_id,
+                job_name=JOB_NAME,
                 resource=Resource.RESOURCE_1,
-                page=page_number,
-                error_code="INGEST-002",
-                error_message=result.error or "unknown error after exhausting retries",
+                duration_ms=result.duration_ms,
+                status=ApiCallStatus.SUCCESS if result.ok else ApiCallStatus.FAILURE,
+                page=total_pages,
+                rows=len(result.records) if result.ok else None,
+                # INGEST-001 (API timeout) is the closest §7 code for an
+                # api_call_logs-level failure, whatever its exact cause
+                # (timeout or connection error) — §7 defines no separate
+                # "connection error" code.
+                error_code=None if result.ok else "INGEST-001",
             )
-            complete = False
-            break
 
-        # Batched raw-dedup write (2026-07-13 fix): one RPC round-trip
-        # for the whole page instead of one per record — see
-        # raw_dedup.upsert_raw_price_entries_batch's docstring for why
-        # this replaced the original per-record loop.
-        parsed_page = [
-            parsed
-            for parsed in (parse_agmarknet_record(rec) for rec in result.records)
-            if parsed is not None
-        ]
-        upsert_raw_price_entries_batch(
-            supabase,
-            resource=Resource.RESOURCE_1.value,
-            batch_id=raw_batch_id,
-            parser_version=PARSER_VERSION,
-            parsed_records=parsed_page,
-        )
-        records.extend(result.records)
+            if not result.ok:
+                # This is the §9 fix in effect: an exhausted-retries page
+                # is recorded explicitly (INGEST-002: pagination failure)
+                # rather than silently treated as "pagination ended here".
+                insert_failed_page(
+                    supabase,
+                    batch_id=batch_id,
+                    resource=Resource.RESOURCE_1,
+                    page=total_pages,
+                    error_code="INGEST-002",
+                    error_message=result.error or "unknown error after exhausting retries",
+                )
+                all_states_complete = False
+                break
 
-        if len(result.records) < runtime.page_size:
-            break  # genuine end of pagination — a short page that DID succeed
-        offset += runtime.page_size
-        time.sleep(1)
+            if reported_total is None:
+                reported_total = result.raw_response.get("total")
 
-    return records, complete, page_number
+            state_had_success = True
+
+            # Batched raw-dedup write (2026-07-13 fix): one RPC round-trip
+            # for the whole page instead of one per record — see
+            # raw_dedup.upsert_raw_price_entries_batch's docstring for why
+            # this replaced the original per-record loop.
+            parsed_page = [
+                parsed
+                for parsed in (parse_agmarknet_record(rec) for rec in result.records)
+                if parsed is not None
+            ]
+            upsert_raw_price_entries_batch(
+                supabase,
+                resource=Resource.RESOURCE_1.value,
+                batch_id=raw_batch_id,
+                parser_version=PARSER_VERSION,
+                parsed_records=parsed_page,
+            )
+            records.extend(result.records)
+            state_record_count += len(result.records)
+
+            if len(result.records) < runtime.page_size:
+                break  # genuine end of this state's data
+            offset += runtime.page_size
+            time.sleep(1)
+
+        if state_had_success:
+            states_with_any_success += 1
+
+        if reported_total is not None and state_record_count < reported_total:
+            print(
+                f"[live_tick] QUALITY-001 WARNING: {state} reported total={reported_total} "
+                f"but only {state_record_count} record(s) collected -- coverage gap, "
+                f"not a page failure (see _fetch_all_resource_1_pages docstring)."
+            )
+            all_states_complete = False
+
+    return records, all_states_complete, total_pages, states_with_any_success
 
 
 # =============================================================================
@@ -264,10 +333,12 @@ def run_live_tick(ctx) -> None:
     """
     Purpose:
         Execute one full live_tick run: acquire the §12 concurrency
-        guard, fetch today's Resource 1 data, resolve identities, score
-        quality, upsert prices, and close out both batch rows — always,
-        even on failure (a batch left RUNNING would permanently block
-        every future run of this job, see `batch_lifecycle.py`).
+        guard, fetch today's Resource 1 data (once per state — see
+        `_fetch_all_resource_1_pages`), resolve identities, score
+        quality, upsert prices, and close out both batch rows —
+        always, even on failure (a batch left RUNNING would
+        permanently block every future run of this job, see
+        `batch_lifecycle.py`).
     Inputs:
         ctx: a `StartupContext` from `validate_startup()`.
     Outputs:
@@ -312,7 +383,7 @@ def run_live_tick(ctx) -> None:
         identity = IdentityClient(supabase)
         unit = identity.resolve_unit(_RAW_UNIT_DEFAULT)
 
-        records, pagination_complete, pages_fetched = _fetch_all_resource_1_pages(
+        records, pagination_complete, pages_fetched, states_with_any_success = _fetch_all_resource_1_pages(
             supabase=supabase,
             batch_id=batch.id,
             raw_batch_id=raw_batch.id,
@@ -353,7 +424,11 @@ def run_live_tick(ctx) -> None:
         # below for visibility since it's an unusual/notable event.
         error_summary = None
         if not pagination_complete:
-            error_summary = "one or more pages failed after exhausting retries — see failed_pages"
+            error_summary = (
+                "one or more pages failed after exhausting retries, or a state's "
+                "collected total didn't reconcile against the government's reported "
+                "total (QUALITY-001) — see failed_pages and run logs"
+            )
         elif rows_failed:
             error_summary = f"{rows_failed} row(s) skipped — malformed data or identity resolution failure"
         elif precedence_skipped:
@@ -382,8 +457,9 @@ def run_live_tick(ctx) -> None:
         print(
             f"[live_tick] {final_status.value} — {len(price_rows)} row(s) upserted, "
             f"{rows_failed} skipped (parse/identity), {precedence_skipped} skipped (§8 precedence), "
+            f"{states_with_any_success}/{len(STATES)} states yielded data, "
             f"{pages_fetched} page(s) fetched"
-            + ("" if pagination_complete else " (pagination incomplete — see failed_pages)")
+            + ("" if pagination_complete else " (incomplete — see failed_pages / QUALITY-001 warnings above)")
         )
 
     except Exception as exc:

@@ -108,6 +108,18 @@ def _fetch_all_resource_2_pages(
         it was the only caller; now `"historical_backfill"` needs the
         exact same function tagging its own `api_call_logs` rows
         correctly).
+
+        2026-07-14: also reconciles each state's actually-collected
+        record count against the `total` field the government API
+        itself reports per response — the same `QUALITY-001` ("Coverage
+        mismatch", §7) check added to `live_tick.py`'s Resource 1 loop,
+        after confirming Resource 1's nationwide stream was silently
+        losing 46% of a day's records past the Elasticsearch
+        `max_result_window` ceiling. Ported here defensively: Resource
+        2 hits the same underlying government API/Elasticsearch
+        backend, so the same per-state ceiling could in principle be
+        hit here too, even though no concrete loss has yet been
+        confirmed for Resource 2 specifically.
     Inputs:
         supabase / batch_id / raw_batch_id / date_str / api_key /
             runtime: as in Step 15.
@@ -116,12 +128,17 @@ def _fetch_all_resource_2_pages(
             distinguishable in that table.
     Outputs:
         4-tuple: (all records fetched across every state's successful
-        pages, whether every state's pagination completed cleanly,
-        number of states that produced at least one successful page,
-        total pages attempted across all states).
+        pages, whether every state's pagination completed cleanly AND
+        reconciled against the government's own reported total, number
+        of states that produced at least one successful page, total
+        pages attempted across all states).
     Failure modes:
         None raised directly — a page-level failure is recorded (see
-        `insert_failed_page`) and reflected in the returned counts.
+        `insert_failed_page`) and a coverage mismatch is only logged
+        (mirrors `live_tick.py`: the `failed_pages` retry model doesn't
+        fit a coverage gap, since the missing records never fit in any
+        single page to begin with); both are reflected in the returned
+        counts rather than raised.
     """
     records: list = []
     all_states_complete = True
@@ -132,6 +149,8 @@ def _fetch_all_resource_2_pages(
         offset = 0
         page_in_state = 0
         state_had_success = False
+        state_record_count = 0
+        reported_total = None
 
         while True:
             page_in_state += 1
@@ -180,6 +199,9 @@ def _fetch_all_resource_2_pages(
                 all_states_complete = False
                 break  # move on to the next state; don't abandon the whole date
 
+            if reported_total is None:
+                reported_total = result.raw_response.get("total")
+
             # Batched raw-dedup write (2026-07-13 fix) — see
             # raw_dedup.upsert_raw_price_entries_batch's docstring.
             parsed_page = [
@@ -195,6 +217,7 @@ def _fetch_all_resource_2_pages(
                 parsed_records=parsed_page,
             )
             records.extend(result.records)
+            state_record_count += len(result.records)
             state_had_success = True
 
             if len(result.records) < runtime.page_size:
@@ -203,6 +226,14 @@ def _fetch_all_resource_2_pages(
 
         if state_had_success:
             states_with_any_success += 1
+
+        if reported_total is not None and state_record_count < reported_total:
+            print(
+                f"[resource2_pipeline] QUALITY-001 WARNING: {state} reported total="
+                f"{reported_total} but only {state_record_count} record(s) collected "
+                f"for {date_str} -- coverage gap, not a page failure."
+            )
+            all_states_complete = False
 
     return records, all_states_complete, states_with_any_success, total_pages
 
@@ -311,7 +342,11 @@ def ingest_resource2_for_date(ctx, *, target_date: date, job_name: str) -> Pipel
                 "Resource 2 appears unreachable"
             )
         elif not all_states_complete:
-            error_summary = "one or more states' pages failed after exhausting retries — see failed_pages"
+            error_summary = (
+                "one or more states' pages failed after exhausting retries, or a "
+                "state's collected total didn't reconcile against the government's "
+                "reported total (QUALITY-001) — see failed_pages and run logs"
+            )
         elif rows_failed:
             error_summary = f"{rows_failed} row(s) skipped — malformed data or identity resolution failure"
         elif precedence_skipped:

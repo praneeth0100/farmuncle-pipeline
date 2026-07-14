@@ -25,15 +25,21 @@ Why this is a thin wrapper (Step 16 update):
     contains what's actually specific to being "the once-daily,
     today-only" caller: which date to pass in, and the §16 alert.
 
-Which calendar day this run targets:
-    §8 calls Resource 2 "evening-finalized" and §9 says its records are
-    "complete finalized daily records by evening." Read together, this
-    means: by the time this script is meant to run (evening), the
-    CURRENT day's records are already finalized — so this script
-    targets today (IST), not yesterday. If the actual GitHub Actions
-    schedule (Phase D) ends up running this before evening IST, this
-    assumption should be revisited; that is a scheduling decision, not
-    something this script can detect or correct for itself.
+Which calendar day(s) this run targets:
+    §8/§9 originally assumed Resource 2 is "evening-finalized" for the
+    current calendar day. Real-world observation on 2026-07-13 showed
+    this is wrong: Resource 2 lags 1-2 days, variably, behind the
+    calendar date, so a run that only ever asked for "today" found
+    nothing on every single invocation.
+
+    Fixed 2026-07-14: this script now retries a short trailing window
+    of dates each evening — today back through
+    `REWRITE_LOOKBACK_DAYS - 1` days — calling the same per-date,
+    idempotent `ingest_resource2_for_date` used by
+    `historical_backfill.py`. Whichever dates the government has
+    actually finished publishing get finalized; dates still
+    unpublished harmlessly no-op via existing precedence/upsert
+    logic. No fixed lag is hardcoded, since the lag itself may drift.
 
 §16 recovery — "Resource 2 unreachable 3+ days":
     After a run is closed FAILED (a genuine total outage — see
@@ -68,6 +74,16 @@ from farmuncle_pipeline.core.resource2_pipeline import ingest_resource2_for_date
 
 JOB_NAME = "daily_rewrite"
 _IST = timezone(timedelta(hours=5, minutes=30))
+
+# Resource 2 does not publish same-day (§9) -- and per real-world
+# observation on 2026-07-13, not even reliably by "evening" as §9
+# originally assumed: it lags 1-2 days, variably, behind the
+# calendar date. Rather than hardcode an exact lag (which may itself
+# drift), each evening run re-attempts a short trailing window of
+# recent dates -- whichever ones have actually been published get
+# finalized; dates still unpublished harmlessly no-op via the same
+# per-date idempotent path historical_backfill.py already uses.
+REWRITE_LOOKBACK_DAYS = 3
 
 # Number of most-recent daily_rewrite runs (including the one that just
 # failed) to inspect for the §16 "3+ days unreachable" outage alert.
@@ -130,40 +146,60 @@ def _raise_outage_alert_if_needed(supabase, *, batch_id: str) -> None:
 def run_daily_rewrite(ctx) -> None:
     """
     Purpose:
-        Run the shared Resource 2 pipeline for today (IST), then check
-        the §16 outage-alert condition if this run itself failed
-        entirely.
+        Run the shared Resource 2 pipeline once per date across a
+        short trailing window (today back through
+        REWRITE_LOOKBACK_DAYS-1 days), then check the §16
+        outage-alert condition if *today's* attempt failed entirely.
+        Mirrors historical_backfill.py's per-date loop (Step 16) --
+        same function, same idempotent-retry safety, just a rolling
+        window instead of a fixed historical range.
+
+        Changed 2026-07-14 from a fixed target_date=today: confirmed
+        Resource 2 lags 1-2 days variably behind the calendar date,
+        so a run that only ever asked for "today" was finding nothing
+        on every single invocation. See REWRITE_LOOKBACK_DAYS above.
     Inputs:
         ctx: a `StartupContext` from `validate_startup()`.
     Outputs:
         None.
     Failure modes:
-        Re-raises any exception from the pipeline after it has already
-        marked both batch rows FAILED (see
-        `resource2_pipeline.ingest_resource2_for_date`).
-        `JobAlreadyRunningError` is caught here and treated as a clean,
-        expected early exit — a concurrent `daily_rewrite` run already
-        in progress is not an error worth failing this invocation for.
+        A single date's catastrophic failure is logged and does not
+        stop the rest of the window (that date's batch rows are
+        already marked FAILED by `ingest_resource2_for_date` itself).
+        `JobAlreadyRunningError` on any date aborts the remaining
+        window for this run -- a concurrent `daily_rewrite` run is
+        already in progress, so retrying here would just collide
+        again.
     """
     today = datetime.now(_IST).date()
+    todays_result = None
 
-    try:
-        result = ingest_resource2_for_date(ctx, target_date=today, job_name=JOB_NAME)
-    except JobAlreadyRunningError as exc:
-        print(f"[daily_rewrite] {exc} — exiting cleanly.")
-        return
-
-    print(
-        f"[daily_rewrite] {result.final_status.value} — {result.rows_processed} row(s) processed, "
-        f"{result.rows_failed} skipped (parse/identity), "
-        f"{result.precedence_skipped} skipped (§8 precedence), "
-        f"{result.states_with_any_success}/{len(STATES)} states yielded data, "
-        f"{result.pages_fetched} page(s) fetched"
-    )
-
-    if result.final_status == IngestionBatchStatus.FAILED:
+    for offset in range(REWRITE_LOOKBACK_DAYS):
+        target_date = today - timedelta(days=offset)
         try:
-            _raise_outage_alert_if_needed(ctx.supabase, batch_id=result.batch_id)
+            result = ingest_resource2_for_date(ctx, target_date=target_date, job_name=JOB_NAME)
+        except JobAlreadyRunningError as exc:
+            print(f"[daily_rewrite] {exc} — exiting cleanly.")
+            return
+        except Exception as exc:
+            print(f"[daily_rewrite] {target_date}: FAILED — {exc}")
+            if offset == 0:
+                todays_result = None
+            continue
+
+        print(
+            f"[daily_rewrite] {target_date}: {result.final_status.value} — {result.rows_processed} row(s) processed, "
+            f"{result.rows_failed} skipped (parse/identity), "
+            f"{result.precedence_skipped} skipped (§8 precedence), "
+            f"{result.states_with_any_success}/{len(STATES)} states yielded data, "
+            f"{result.pages_fetched} page(s) fetched"
+        )
+        if offset == 0:
+            todays_result = result
+
+    if todays_result is not None and todays_result.final_status == IngestionBatchStatus.FAILED:
+        try:
+            _raise_outage_alert_if_needed(ctx.supabase, batch_id=todays_result.batch_id)
         except ConfigError as alert_exc:
             # The batch itself is already correctly closed FAILED — a
             # failure to also write the §16 alert shouldn't crash an

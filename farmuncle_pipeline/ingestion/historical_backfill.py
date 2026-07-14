@@ -145,6 +145,8 @@ def run_historical_backfill(ctx, *, start_date: date, end_date: date) -> None:
         (see module docstring).
     """
     succeeded = partial = failed = 0
+    partial_dates: list[date] = []
+    failed_dates: list[date] = []
 
     for target_date in _date_range(start_date, end_date):
         try:
@@ -161,14 +163,17 @@ def run_historical_backfill(ctx, *, start_date: date, end_date: date) -> None:
             # one date should not stop the rest of the range.
             print(f"[historical_backfill] {target_date}: FAILED — {exc}")
             failed += 1
+            failed_dates.append(target_date)
             continue
 
         if result.final_status == IngestionBatchStatus.SUCCESS:
             succeeded += 1
         elif result.final_status == IngestionBatchStatus.PARTIAL:
             partial += 1
+            partial_dates.append(target_date)
         else:
             failed += 1
+            failed_dates.append(target_date)
 
         print(
             f"[historical_backfill] {target_date}: {result.final_status.value} — "
@@ -183,6 +188,17 @@ def run_historical_backfill(ctx, *, start_date: date, end_date: date) -> None:
         f"[historical_backfill] range {start_date} to {end_date} complete — "
         f"{total} date(s) attempted: {succeeded} SUCCESS, {partial} PARTIAL, {failed} FAILED"
     )
+    # Surfaced explicitly, not just as a count: with a 30+ date range,
+    # scrolling back through every per-date line to find which ones had
+    # a real gap (QUALITY-001 coverage mismatch or a page failure -- see
+    # resource2_pipeline.py) doesn't scale. These two lines are the
+    # entire point of running a backfill over a wide range: knowing
+    # exactly which dates still need attention afterward, at a glance,
+    # without re-reading the whole log.
+    if partial_dates:
+        print(f"[historical_backfill] PARTIAL dates (see QUALITY-001/failed_pages): {partial_dates}")
+    if failed_dates:
+        print(f"[historical_backfill] FAILED dates (re-run these specifically): {failed_dates}")
 
 
 def main() -> None:

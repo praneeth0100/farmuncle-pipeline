@@ -79,7 +79,15 @@ _RAW_UNIT_DEFAULT = "kg"
 @dataclass(frozen=True)
 class PipelineResult:
     """Purpose: everything a caller needs to report on or react to one
-    date's ingestion run, without re-deriving it from batch rows."""
+    date's ingestion run, without re-deriving it from batch rows.
+
+    fetch_seconds/identity_seconds/upsert_seconds (added 2026-07-14,
+    Step 1 of the historical_backfill performance investigation): wall-
+    clock time for each of the three phases below, so callers can print
+    a per-date breakdown instead of guessing where time went. This is
+    diagnostic instrumentation, not a permanent fix — see
+    HANDOUT_backfill_performance.md for the investigation this
+    supports."""
     batch_id: str
     target_date: date
     final_status: IngestionBatchStatus
@@ -90,6 +98,9 @@ class PipelineResult:
     pages_fetched: int
     total_records: int
     error_summary: str | None
+    fetch_seconds: float
+    identity_seconds: float
+    upsert_seconds: float
 
 
 def _fetch_all_resource_2_pages(
@@ -293,6 +304,7 @@ def ingest_resource2_for_date(ctx, *, target_date: date, job_name: str) -> Pipel
         identity = IdentityClient(supabase)
         unit = identity.resolve_unit(_RAW_UNIT_DEFAULT)
 
+        _fetch_start = time.monotonic()
         records, all_states_complete, states_with_any_success, pages_fetched = (
             _fetch_all_resource_2_pages(
                 supabase=supabase,
@@ -304,12 +316,14 @@ def ingest_resource2_for_date(ctx, *, target_date: date, job_name: str) -> Pipel
                 job_name=job_name,
             )
         )
+        fetch_seconds = time.monotonic() - _fetch_start
 
         # A total outage (zero states yielded even one successful page)
         # is worse than "some states/pages failed" — see daily_rewrite's
         # §16 handling, which relies on this distinction.
         total_outage = states_with_any_success == 0
 
+        _identity_start = time.monotonic()
         result = process_records(
             records,
             identity=identity,
@@ -319,14 +333,17 @@ def ingest_resource2_for_date(ctx, *, target_date: date, job_name: str) -> Pipel
             raw_api_batch_id=raw_batch.id,
             job_name=job_name,
         )
+        identity_seconds = time.monotonic() - _identity_start
         price_rows = result.price_rows
         rows_failed += result.rows_failed
         rows_processed += len(price_rows)
 
+        _upsert_start = time.monotonic()
         price_rows, precedence_skipped = filter_rows_by_precedence(
             supabase, price_rows, Source.RESOURCE_2
         )
         upsert_price_rows(supabase, price_rows, runtime.batch_size)
+        upsert_seconds = time.monotonic() - _upsert_start
 
         if total_outage:
             final_status = IngestionBatchStatus.FAILED
@@ -383,6 +400,9 @@ def ingest_resource2_for_date(ctx, *, target_date: date, job_name: str) -> Pipel
             pages_fetched=pages_fetched,
             total_records=len(records),
             error_summary=error_summary,
+            fetch_seconds=fetch_seconds,
+            identity_seconds=identity_seconds,
+            upsert_seconds=upsert_seconds,
         )
 
     except Exception as exc:

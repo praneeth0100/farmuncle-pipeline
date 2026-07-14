@@ -120,6 +120,26 @@ def _normalize_crop_name(name: str | None) -> str:
     return s.strip()
 
 
+def _normalize_variety(raw_variety: str | None) -> str:
+    """Python mirror of the `normalize_variety` SQL function — verified
+    against the live definition (2026-07-14): unlike
+    `normalize_market_name`/`normalize_crop_name`, this one is a pure
+    SQL function with no table lookups, no aliasing, and no fuzzy
+    matching (`LANGUAGE sql IMMUTABLE`) — just
+    blank/null -> 'other', else lowercase + trim + collapse whitespace.
+    Because there is nothing server-side this could disagree with
+    (no data to be stale against), `resolve_variety` calls this
+    directly instead of going through the RPC at all — unlike mandi/
+    crop resolution, there's no unreplicated fuzzy/creation path this
+    needs to fall back to. If `normalize_variety` in the database is
+    ever changed to reference a table (aliases, canonicalization,
+    etc.), this mirror must be updated to match or reintroduce an RPC
+    fallback."""
+    if raw_variety is None or raw_variety.strip() == "":
+        return "other"
+    return re.sub(r"\s+", " ", raw_variety.strip().lower()).strip()
+
+
 @dataclass(frozen=True)
 class ResolvedEntity:
     """Purpose: an entity id plus whether resolving it required an RPC
@@ -350,36 +370,36 @@ class IdentityClient:
     def resolve_variety(self, raw_variety: str) -> str:
         """
         Purpose:
-            Normalize a variety string via the `normalize_variety` RPC,
-            memoized per raw input string. `mandi_daily_prices.variety`
-            is a plain text column (not FK'd to a canonical table), but
-            it still participates in the business-key uniqueness
+            Normalize a variety string. `mandi_daily_prices.variety`
+            is a plain text column (not FK'd to a canonical table),
+            but it still participates in the business-key uniqueness
             constraint, so unnormalized spelling variants (casing,
             whitespace, "Other" vs "other") would silently fragment
-            what should be the same row — hence still routing through
-            the RPC rather than a Python `.strip()`/`.title()`, per
-            invariant 3.
+            what should be the same row.
+
+            Computed locally via `_normalize_variety` rather than the
+            `normalize_variety` RPC — confirmed (2026-07-14) that RPC
+            is a pure SQL function with no table lookups or fuzzy
+            logic, so there's nothing server-side to disagree with,
+            unlike `resolve_mandi`/`resolve_crop`. Before this change,
+            this was the dominant remaining identity-resolution cost
+            after the mandi/crop preload landed: ~500+ distinct
+            varieties/day, each needing an RPC round trip on every
+            single run (never preloadable the way mandi/crop were,
+            since there's no `varieties` table to preload from — this
+            fix removes the round trip entirely instead).
         Inputs:
             raw_variety: variety string as reported by the government
                 API (may be blank).
         Outputs:
             Normalized variety string.
         Failure modes:
-            Raises `ConfigError` if the RPC call fails.
+            None raised — pure string transformation.
         """
         if raw_variety in self._variety_cache:
             return self._variety_cache[raw_variety]
 
-        try:
-            result = self._client.rpc(
-                "normalize_variety", {"p_variety": raw_variety}
-            ).execute()
-        except Exception as exc:
-            raise ConfigError(
-                f"normalize_variety failed (raw_variety={raw_variety!r}): {exc}"
-            ) from exc
-
-        normalized = result.data
+        normalized = _normalize_variety(raw_variety)
         self._variety_cache[raw_variety] = normalized
         return normalized
 

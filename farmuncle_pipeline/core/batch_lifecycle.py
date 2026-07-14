@@ -86,18 +86,19 @@ class JobAlreadyRunningError(Exception):
 
 
 # Any single ingestion run (one live_tick invocation, one
-# historical_backfill date) has, in practice, taken 1-2 minutes even
-# under retries — never anything close to this. A RUNNING row older
-# than this was, with overwhelming likelihood, left behind by a
-# process that crashed, got OOM-killed, hit a GitHub Actions timeout,
-# or was manually cancelled — none of which run the cleanup code that
-# would normally call `complete_batch`. Genuine concurrent runs of the
-# same job_name are the only other explanation for a RUNNING row, and
-# those don't survive this long uncompleted either. 2026-07-14: added
-# after exactly this happened — an orphaned `historical_backfill` row
-# blocked every subsequent invocation for 6+ hours until a human found
-# and manually closed it in Supabase. This makes that self-healing.
-_STALE_LOCK_MINUTES = 30
+# historical_backfill date) was originally assumed to take 1-2 minutes
+# based on live_tick's speed. Confirmed 2026-07-14 that assumption was
+# wrong for historical_backfill specifically: a single Resource 2 date
+# with heavy historical volume took ~15-20 minutes across all 33
+# states (many multi-page states, 500 rows/page). A 30-minute
+# threshold would risk auto-reaping a genuinely slow-but-real run —
+# exactly the failure mode this mechanism exists to avoid causing.
+# 90 minutes gives real runs (even unusually slow ones, retries
+# included) a wide safety margin, while still being far below the 6+
+# hours an actually-orphaned lock sat for in the incident that
+# motivated this fix. Tune upward further if a real date ever
+# legitimately approaches this.
+_STALE_LOCK_MINUTES = 90
 
 
 def _reap_stale_running_lock(client: "Client", *, job_name: str) -> None:

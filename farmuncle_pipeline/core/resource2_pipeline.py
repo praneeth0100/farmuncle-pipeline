@@ -305,6 +305,7 @@ def ingest_resource2_for_date(ctx, *, target_date: date, job_name: str) -> Pipel
         )
 
         identity = IdentityClient(supabase)
+        identity.preload()
         unit = identity.resolve_unit(_RAW_UNIT_DEFAULT)
 
         _fetch_start = time.monotonic()

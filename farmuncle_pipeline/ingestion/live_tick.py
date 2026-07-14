@@ -382,6 +382,7 @@ def run_live_tick(ctx) -> None:
         )
 
         identity = IdentityClient(supabase)
+        identity.preload()
         unit = identity.resolve_unit(_RAW_UNIT_DEFAULT)
 
         records, pagination_complete, pages_fetched, states_with_any_success = _fetch_all_resource_1_pages(

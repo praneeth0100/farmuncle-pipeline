@@ -217,6 +217,7 @@ def run_retry_failed_pages(ctx) -> None:
 
     try:
         identity = IdentityClient(supabase)
+        identity.preload()
         unit = identity.resolve_unit(_RAW_UNIT_DEFAULT)
 
         for fp in _fetch_pending_failed_pages(supabase):

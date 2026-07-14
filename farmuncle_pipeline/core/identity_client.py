@@ -41,6 +41,7 @@ Explicitly out of scope for this file:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -48,6 +49,75 @@ from farmuncle_pipeline.config import ConfigError, Source
 
 if TYPE_CHECKING:
     from supabase import Client
+
+
+# =============================================================================
+# Preload snapshot (Fix #1, 2026-07-14 performance investigation)
+#
+# Why this exists:
+#   Measured on real historical_backfill runs, identity resolution
+#   (find_or_create_mandi / find_or_create_crop RPC calls) was 75-77%
+#   of total per-date runtime — because the same ~2,800 mandis and
+#   ~330 crops repeat every single day, nationwide, forever, and this
+#   client only ever memoized within ONE run: every new date started
+#   from an empty cache and re-asked the database "does this exist?"
+#   for entities it had already resolved the day before, and the day
+#   before that.
+#
+# What this DOES replicate from the RPCs (confirmed by reading the
+# live function definitions in Supabase, not guessed):
+#   - `normalize_market_name`/`normalize_crop_name`: lowercase, trim,
+#     "&" -> " and ", strip [.,], collapse whitespace. Copied here
+#     verbatim as `_normalize_market_name`/`_normalize_crop_name`.
+#   - The EXACT-match lookup: mandis by
+#     (normalized_name, state, district) where status='ACTIVE';
+#     crops by normalized_name where status='ACTIVE'.
+#   - The ALIAS-match lookup: mandi_aliases/crop_aliases by
+#     normalized_alias (this table isn't state-scoped server-side,
+#     so neither is the preloaded alias dict here).
+#
+# What this deliberately DOES NOT replicate (and why that's safe):
+#   - Fuzzy matching (pg_trgm `similarity() >= FUZZY_THRESHOLD`,
+#     currently 0.75). Replicating Postgres trigram similarity in
+#     Python risks subtly disagreeing with the server on a near-match
+#     ("Benny Hills" vs "Benny Hills APMC") — which could silently
+#     create a duplicate entity. Anything that misses BOTH the exact
+#     and alias preload dicts below still falls through to the real
+#     `find_or_create_mandi`/`find_or_create_crop` RPC, unchanged,
+#     exactly as it worked before this fix — fuzzy matching and
+#     entity creation still only ever happen server-side.
+#   - Entity creation itself — same reasoning.
+#
+# Net effect: a name this run has genuinely seen before (exact or
+# already-aliased) skips the RPC round trip entirely. A name that's
+# new, or only a near-match, pays the same RPC cost as before — this
+# fix only removes redundant work, it never changes which entity a
+# row resolves to.
+# =============================================================================
+
+def _normalize_market_name(name: str | None) -> str:
+    """Python mirror of the `normalize_market_name` SQL function —
+    keep these in exact sync; if that RPC's normalization ever
+    changes, this must change with it or preload hits will silently
+    stop matching what the database would have matched."""
+    s = (name or "").strip().lower()
+    s = s.replace("&", " and ")
+    s = re.sub(r"[.,]", " ", s)
+    s = re.sub(r"\s+", " ", s)
+    return s.strip()
+
+
+def _normalize_crop_name(name: str | None) -> str:
+    """Python mirror of the `normalize_crop_name` SQL function — same
+    body as `_normalize_market_name` today (both RPCs happen to be
+    identical), kept as a separate function since there's no
+    guarantee they stay identical, and this file shouldn't assume
+    they do."""
+    s = (name or "").strip().lower()
+    s = s.replace("&", " and ")
+    s = re.sub(r"[.,]", " ", s)
+    s = re.sub(r"\s+", " ", s)
+    return s.strip()
 
 
 @dataclass(frozen=True)
@@ -71,6 +141,14 @@ class IdentityClient:
         short-lived process anyway (GitHub Actions runners are fully
         ephemeral, per spec §10 assumption 5), so there's no benefit
         to caching beyond one run's lifetime.
+
+        Callers SHOULD call `preload()` once, immediately after
+        construction and before any `resolve_mandi`/`resolve_crop`
+        calls, to get the performance benefit described in this
+        module's "Preload snapshot" section above. Calling `preload()`
+        is optional, not required for correctness — if it's never
+        called, every resolve falls back to the RPC exactly as it did
+        before this fix existed.
     """
 
     def __init__(self, client: "Client") -> None:
@@ -79,6 +157,81 @@ class IdentityClient:
         self._crop_cache: dict[str, int] = {}
         self._variety_cache: dict[str, str] = {}
         self._unit_cache: dict[str, str] = {}
+
+        # Preload snapshot state — empty/unused until `preload()` is
+        # called. `_preloaded` gates whether resolve_mandi/resolve_crop
+        # even attempt the snapshot dicts, so a caller that never
+        # calls `preload()` gets identical behavior to before this fix.
+        self._preloaded = False
+        self._mandi_exact: dict[tuple[str, str, str | None], int] = {}
+        self._mandi_alias: dict[str, int] = {}
+        self._crop_exact: dict[str, int] = {}
+        self._crop_alias: dict[str, int] = {}
+
+    def preload(self) -> None:
+        """
+        Purpose:
+            Bulk-load every ACTIVE mandi/crop and their known aliases
+            into memory in four queries total, so that
+            `resolve_mandi`/`resolve_crop` can skip the RPC round trip
+            entirely for any name this run sees that's an exact or
+            already-aliased match — see this module's "Preload
+            snapshot" section for what is and isn't replicated, and
+            why. Call this once per `IdentityClient` instance, before
+            any resolve_mandi/resolve_crop calls.
+        Inputs:
+            None (uses the client passed to `__init__`).
+        Outputs:
+            None. Populates internal snapshot dicts and sets
+            `_preloaded = True`.
+        Failure modes:
+            Raises `ConfigError` if any of the four bulk selects fail.
+            Deliberately not caught/swallowed — a partial or failed
+            preload silently falling back to "acts like preload never
+            happened" would be fine correctness-wise, but a failure
+            here usually means something is wrong with the connection
+            that resolve calls are about to hit anyway, so surfacing
+            it immediately is more useful than a confusing failure
+            later.
+        """
+        try:
+            mandi_rows = (
+                self._client.table("mandis")
+                .select("id,normalized_name,state,district")
+                .eq("status", "ACTIVE")
+                .execute()
+            ).data or []
+            mandi_alias_rows = (
+                self._client.table("mandi_aliases")
+                .select("mandi_id,normalized_alias")
+                .execute()
+            ).data or []
+            crop_rows = (
+                self._client.table("crops")
+                .select("id,normalized_name")
+                .eq("status", "ACTIVE")
+                .execute()
+            ).data or []
+            crop_alias_rows = (
+                self._client.table("crop_aliases")
+                .select("crop_id,normalized_alias")
+                .execute()
+            ).data or []
+        except Exception as exc:
+            raise ConfigError(f"IdentityClient.preload failed: {exc}") from exc
+
+        self._mandi_exact = {
+            (row["normalized_name"], row["state"], row["district"]): row["id"]
+            for row in mandi_rows
+        }
+        self._mandi_alias = {
+            row["normalized_alias"]: row["mandi_id"] for row in mandi_alias_rows
+        }
+        self._crop_exact = {row["normalized_name"]: row["id"] for row in crop_rows}
+        self._crop_alias = {
+            row["normalized_alias"]: row["crop_id"] for row in crop_alias_rows
+        }
+        self._preloaded = True
 
     def resolve_mandi(
         self,
@@ -92,9 +245,13 @@ class IdentityClient:
     ) -> ResolvedEntity:
         """
         Purpose:
-            Resolve (or create) a canonical mandi id via
-            `find_or_create_mandi`, memoized per (name, state) for the
-            life of this `IdentityClient`.
+            Resolve (or create) a canonical mandi id. Checks, in
+            order: (1) this run's own memoization cache, (2) if
+            `preload()` was called, the preloaded exact-match and
+            alias-match snapshots (no network call), (3) the
+            `find_or_create_mandi` RPC — which also handles fuzzy
+            matching and entity creation, neither of which are
+            replicated locally (see module docstring).
         Inputs:
             name / state / district: as reported by the government API
                 for this row.
@@ -104,13 +261,25 @@ class IdentityClient:
                 them (Resource 1/2 government feeds do not; reserved
                 for a future resource that does).
         Outputs:
-            `ResolvedEntity`.
+            `ResolvedEntity`. `first_seen_this_run` is False for both
+            run-cache hits and preload-snapshot hits (both mean "this
+            entity was already known, not newly created") and True
+            only when the RPC itself was called and returned.
         Failure modes:
             Raises `ConfigError` if the RPC call itself fails.
         """
         key = (name, state, district)
         if key in self._mandi_cache:
             return ResolvedEntity(id=self._mandi_cache[key], first_seen_this_run=False)
+
+        if self._preloaded:
+            normalized = _normalize_market_name(name)
+            preload_id = self._mandi_exact.get((normalized, state, district))
+            if preload_id is None:
+                preload_id = self._mandi_alias.get(normalized)
+            if preload_id is not None:
+                self._mandi_cache[key] = preload_id
+                return ResolvedEntity(id=preload_id, first_seen_this_run=False)
 
         try:
             result = self._client.rpc(
@@ -136,9 +305,10 @@ class IdentityClient:
     def resolve_crop(self, *, name: str, unit: str, source: Source) -> ResolvedEntity:
         """
         Purpose:
-            Resolve (or create) a canonical crop id via
-            `find_or_create_crop`, memoized per commodity name for the
-            life of this `IdentityClient`.
+            Resolve (or create) a canonical crop id. Same three-step
+            order as `resolve_mandi` (run cache, then preload
+            snapshot if `preload()` was called, then the
+            `find_or_create_crop` RPC for anything not already known).
         Inputs:
             name: commodity name as reported by the government API.
             unit: passed through as `p_unit` (already normalized by
@@ -147,12 +317,23 @@ class IdentityClient:
             source: `Source.RESOURCE_1` / `Source.RESOURCE_2` /
                 `Source.MANUAL`.
         Outputs:
-            `ResolvedEntity`.
+            `ResolvedEntity`. `first_seen_this_run` is False for both
+            run-cache hits and preload-snapshot hits, True only when
+            the RPC itself was called.
         Failure modes:
             Raises `ConfigError` if the RPC call itself fails.
         """
         if name in self._crop_cache:
             return ResolvedEntity(id=self._crop_cache[name], first_seen_this_run=False)
+
+        if self._preloaded:
+            normalized = _normalize_crop_name(name)
+            preload_id = self._crop_exact.get(normalized)
+            if preload_id is None:
+                preload_id = self._crop_alias.get(normalized)
+            if preload_id is not None:
+                self._crop_cache[name] = preload_id
+                return ResolvedEntity(id=preload_id, first_seen_this_run=False)
 
         try:
             result = self._client.rpc(

@@ -370,6 +370,7 @@ def run_live_tick(ctx) -> None:
     raw_batch: RawApiBatchHandle | None = None
     rows_processed = 0
     rows_failed = 0
+    rows_quarantined = 0
 
     try:
         raw_batch = start_raw_batch(
@@ -413,9 +414,16 @@ def run_live_tick(ctx) -> None:
         price_rows, precedence_skipped = filter_rows_by_precedence(
             supabase, price_rows, Source.RESOURCE_1
         )
-        upsert_price_rows(supabase, price_rows, runtime.batch_size)
+        upsert_result = upsert_price_rows(
+            supabase,
+            price_rows,
+            runtime.batch_size,
+            batch_id=batch.id,
+            resource=Resource.RESOURCE_1,
+        )
+        rows_quarantined = upsert_result.rows_quarantined
 
-        is_partial = (not pagination_complete) or rows_failed > 0
+        is_partial = (not pagination_complete) or rows_failed > 0 or rows_quarantined > 0
         final_status = IngestionBatchStatus.PARTIAL if is_partial else IngestionBatchStatus.SUCCESS
 
         # precedence_skipped is deliberately NOT part of is_partial — a
@@ -431,6 +439,11 @@ def run_live_tick(ctx) -> None:
             )
         elif rows_failed:
             error_summary = f"{rows_failed} row(s) skipped — malformed data or identity resolution failure"
+        elif rows_quarantined:
+            error_summary = (
+                f"{rows_quarantined} row(s) violated a database constraint at upsert "
+                f"(e.g. chk_prices_min_max) and were quarantined — see data_quality_issues"
+            )
         elif precedence_skipped:
             error_summary = (
                 f"{precedence_skipped} row(s) skipped — a higher-precedence "

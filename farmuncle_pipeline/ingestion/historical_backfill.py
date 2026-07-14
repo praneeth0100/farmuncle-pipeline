@@ -173,6 +173,7 @@ def run_historical_backfill(ctx, *, start_date: date, end_date: date) -> None:
         print(
             f"[historical_backfill] {target_date}: {result.final_status.value} — "
             f"{result.rows_processed} row(s) processed, {result.rows_failed} skipped (parse/identity), "
+            f"{result.rows_quarantined} quarantined (constraint violation), "
             f"{result.precedence_skipped} skipped (§8 precedence), "
             f"{result.states_with_any_success}/{len(STATES)} states yielded data, "
             f"{result.pages_fetched} page(s) fetched -- "

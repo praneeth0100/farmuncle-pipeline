@@ -57,7 +57,49 @@ Explicitly out of scope for this file:
 
 from __future__ import annotations
 
-from farmuncle_pipeline.config import ConfigError, Source
+from dataclasses import dataclass
+
+from farmuncle_pipeline.config import ConfigError, Resource, Source
+from farmuncle_pipeline.core.batch_lifecycle import insert_data_quality_issue
+
+# Postgres SQLSTATE prefixes that indicate a permanent, row-specific
+# rejection (bad data), as opposed to a transient/infra failure
+# (network, auth, pooler). Only these are eligible for the
+# chunk->row isolation fallback in `upsert_price_rows` below — anything
+# else (timeouts, connection resets, 5xx) is re-raised immediately,
+# since retrying those row-by-row would just fail hundreds of times in
+# a row for no benefit and burn a lot of time before still failing the
+# date.
+#   23514 check_violation      (e.g. chk_prices_min_max)
+#   23502 not_null_violation
+#   22*   data_exception        (invalid_text_representation, numeric
+#                                 out of range, etc.)
+_ROW_LEVEL_ERROR_CODE_PREFIXES = ("23514", "23502", "22")
+
+
+def _is_row_level_error(exc: Exception) -> bool:
+    """True if `exc` looks like a permanent, single-row data problem
+    (safe to isolate and quarantine) rather than a transient/infra
+    failure (which should abort the whole date, not be retried 1000x
+    row-by-row). Falls back to False (i.e. "not row-level, re-raise")
+    for anything that isn't a recognizable postgrest APIError with a
+    SQLSTATE code — being conservative here is deliberate."""
+    code = getattr(exc, "code", None)
+    if not code:
+        return False
+    return any(code.startswith(prefix) for prefix in _ROW_LEVEL_ERROR_CODE_PREFIXES)
+
+
+@dataclass(frozen=True)
+class UpsertResult:
+    """Purpose: bundles what happened during `upsert_price_rows` so
+    callers can report it (and decide PARTIAL vs SUCCESS) instead of
+    just getting a bare None back. `quarantined` rows are ALREADY
+    durably recorded in `data_quality_issues` by the time this is
+    returned — callers don't need to do anything further with them
+    except surface the count in their own summary/error_summary."""
+    rows_upserted: int
+    rows_quarantined: int
 
 # §8's precedence order, expressed as a rank: higher wins. A row is
 # only allowed to overwrite an existing row at the same business key
@@ -136,7 +178,14 @@ def filter_rows_by_precedence(client, rows: list[dict], new_source: Source) -> t
     return kept, skipped
 
 
-def upsert_price_rows(client, rows: list[dict], batch_size: int) -> None:
+def upsert_price_rows(
+    client,
+    rows: list[dict],
+    batch_size: int,
+    *,
+    batch_id: str | None = None,
+    resource: Resource | None = None,
+) -> UpsertResult:
     """
     Purpose:
         Upsert parsed price rows into `mandi_daily_prices` in chunks of
@@ -152,17 +201,49 @@ def upsert_price_rows(client, rows: list[dict], batch_size: int) -> None:
         its own and will happily overwrite a higher-precedence row if
         asked to; that check is deliberately a separate step (see this
         module's docstring for why).
+
+        ISOLATION (added after the 2026-06-29 incident: a single row
+        with min_price=83548/max_price=8354 — a government 10x
+        data-entry error — hit `chk_prices_min_max` and aborted the
+        entire date, losing 17000+ already-fetched, already-identity-
+        resolved rows for every other row in that chunk and every
+        chunk after it):
+        Each chunk is first attempted as a single bulk upsert (the
+        fast path — this is what makes bulk upsert worth doing at
+        all). If, and only if, that bulk call fails with a
+        recognizably row-level, permanent error (see
+        `_is_row_level_error` — check/not-null/data-exception
+        violations, NOT network/timeout/5xx), the chunk is retried
+        row-by-row to find and isolate the specific offending row(s):
+        every row that upserts fine on its own is kept, every row that
+        fails on its own is quarantined into `data_quality_issues`
+        (via `insert_data_quality_issue`) and excluded — the rest of
+        the chunk, and every subsequent chunk, still gets written.
+        A transient/infra failure (anything `_is_row_level_error`
+        returns False for) is NOT retried row-by-row — it's re-raised
+        immediately, same as before, since row-by-row retry of an
+        infra failure just fails hundreds of times for no benefit.
     Inputs:
         client: an already-constructed Supabase client.
         rows: parsed, identity-resolved, quality-scored row dicts.
         batch_size: chunk size for each upsert call.
+        batch_id: the `ingestion_batches.id` for this run — required
+            to quarantine a row; if a row-level error occurs and
+            batch_id/resource were not supplied, the error is
+            re-raised instead (quarantining without lineage would
+            create an untraceable record).
+        resource: which government resource these rows came from —
+            required alongside batch_id, same reasoning.
     Outputs:
-        None.
+        `UpsertResult(rows_upserted, rows_quarantined)`.
     Failure modes:
-        Raises `ConfigError` if any chunk's upsert fails.
+        Raises `ConfigError` if a chunk's bulk upsert fails for a
+        non-row-level reason, if a quarantine insert itself fails, or
+        if a row-level error occurs but batch_id/resource weren't
+        supplied (nowhere safe to record what was dropped).
     """
     if not rows:
-        return
+        return UpsertResult(rows_upserted=0, rows_quarantined=0)
 
     deduped: dict[tuple, dict] = {}
     for row in rows:
@@ -170,13 +251,49 @@ def upsert_price_rows(client, rows: list[dict], batch_size: int) -> None:
         deduped[key] = row
     unique_rows = list(deduped.values())
 
+    table = client.table("mandi_daily_prices")
+    total_upserted = 0
+    total_quarantined = 0
+
     for i in range(0, len(unique_rows), batch_size):
         chunk = unique_rows[i : i + batch_size]
         try:
-            client.table("mandi_daily_prices").upsert(
-                chunk, on_conflict="mandi_id,crop_id,variety,price_date"
-            ).execute()
+            table.upsert(chunk, on_conflict="mandi_id,crop_id,variety,price_date").execute()
+            total_upserted += len(chunk)
+            continue
         except Exception as exc:
+            if not _is_row_level_error(exc):
+                raise ConfigError(
+                    f"Failed to upsert mandi_daily_prices chunk (size={len(chunk)}): {exc}"
+                ) from exc
+            # Fall through to row-by-row isolation below.
+
+        if batch_id is None or resource is None:
             raise ConfigError(
-                f"Failed to upsert mandi_daily_prices chunk (size={len(chunk)}): {exc}"
-            ) from exc
+                f"Row-level upsert failure in a chunk of size {len(chunk)}, but no "
+                f"batch_id/resource was supplied to quarantine the offending row(s) — "
+                f"cannot safely drop data with no lineage. Pass batch_id and resource "
+                f"to upsert_price_rows to enable isolation."
+            )
+
+        for row in chunk:
+            try:
+                table.upsert([row], on_conflict="mandi_id,crop_id,variety,price_date").execute()
+                total_upserted += 1
+            except Exception as row_exc:
+                if not _is_row_level_error(row_exc):
+                    raise ConfigError(
+                        f"Failed to upsert an individual mandi_daily_prices row during "
+                        f"isolation fallback: {row_exc}"
+                    ) from row_exc
+                insert_data_quality_issue(
+                    client,
+                    batch_id=batch_id,
+                    resource=resource,
+                    row=row,
+                    error_code=getattr(row_exc, "code", None),
+                    error_message=str(row_exc),
+                )
+                total_quarantined += 1
+
+    return UpsertResult(rows_upserted=total_upserted, rows_quarantined=total_quarantined)

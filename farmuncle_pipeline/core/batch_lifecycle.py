@@ -557,3 +557,75 @@ def insert_failed_page(
         raise ConfigError(
             f"Failed to insert failed_pages row (batch_id={batch_id!r}, page={page}): {exc}"
         ) from exc
+
+
+# =============================================================================
+# data_quality_issues (ops layer — permanent bad-data quarantine, NOT
+# retryable like failed_pages)
+#
+# Why this is a separate table from failed_pages rather than reusing it:
+#   failed_pages is keyed at PAGE granularity and exists so
+#   retry_failed_pages.py can re-fetch that exact page later — it is
+#   for TRANSIENT failures (network blip, rate limit, timeout) where
+#   trying again is the right move.
+#   A `chk_prices_min_max` violation (or similar row-level constraint
+#   violation) is neither page-level nor transient: it's one bad row
+#   inside an otherwise-good page, and re-fetching the same page will
+#   produce the identical bad row forever (2026-06-29's
+#   min_price=83548/max_price=8354 is a permanent government
+#   data-entry error, not a fluke). Filing it under failed_pages would
+#   make retry_failed_pages.py loop on something it can never fix.
+#   This table is the durable record of "this specific row will never
+#   be stored, and here's why" — for human triage, not automated retry.
+# =============================================================================
+
+def insert_data_quality_issue(
+    client: "Client",
+    *,
+    batch_id: str,
+    resource: Resource,
+    row: dict,
+    error_code: str | None,
+    error_message: str,
+) -> None:
+    """
+    Purpose:
+        Record one price row that was dropped from `mandi_daily_prices`
+        because it violated a database constraint (or some other
+        row-level rejection) at upsert time — the row-level counterpart
+        to `insert_failed_page`'s page-level record. See this
+        function's module-section docstring for why this is a
+        different table from `failed_pages`.
+    Inputs:
+        client: an already-constructed Supabase client.
+        batch_id: the `ingestion_batches.id` this row's run belongs to.
+        resource: which government resource the row came from.
+        row: the full row dict that was rejected (mandi_id, crop_id,
+            variety, price_date, modal_price, min_price, max_price,
+            source, etc.) — stored verbatim so triage never has to
+            reconstruct it from logs.
+        error_code: the Postgres SQLSTATE if available (e.g. "23514"
+            for a check-constraint violation), else None.
+        error_message: the database's error message, for triage.
+    Outputs:
+        None.
+    Failure modes:
+        Raises `ConfigError` if the insert fails. Deliberately NOT
+        swallowed — losing the quarantine record would silently
+        re-create the exact "row just vanishes" problem this table
+        exists to prevent.
+    """
+    payload = {
+        "batch_id": batch_id,
+        "resource": resource.value,
+        "row_data": row,
+        "error_code": error_code,
+        "error_message": error_message,
+    }
+    try:
+        client.table("data_quality_issues").insert(payload).execute()
+    except Exception as exc:
+        raise ConfigError(
+            f"Failed to insert data_quality_issues row (batch_id={batch_id!r}, "
+            f"row={row!r}): {exc}"
+        ) from exc

@@ -85,6 +85,94 @@ class JobAlreadyRunningError(Exception):
     """
 
 
+# Any single ingestion run (one live_tick invocation, one
+# historical_backfill date) has, in practice, taken 1-2 minutes even
+# under retries — never anything close to this. A RUNNING row older
+# than this was, with overwhelming likelihood, left behind by a
+# process that crashed, got OOM-killed, hit a GitHub Actions timeout,
+# or was manually cancelled — none of which run the cleanup code that
+# would normally call `complete_batch`. Genuine concurrent runs of the
+# same job_name are the only other explanation for a RUNNING row, and
+# those don't survive this long uncompleted either. 2026-07-14: added
+# after exactly this happened — an orphaned `historical_backfill` row
+# blocked every subsequent invocation for 6+ hours until a human found
+# and manually closed it in Supabase. This makes that self-healing.
+_STALE_LOCK_MINUTES = 30
+
+
+def _reap_stale_running_lock(client: "Client", *, job_name: str) -> None:
+    """
+    Purpose:
+        Before attempting to acquire the §12 concurrency lock, check
+        whether an existing RUNNING row for this `job_name` is old
+        enough to be confidently treated as orphaned (see
+        `_STALE_LOCK_MINUTES` above) rather than a genuine in-progress
+        run. If so, close it out as FAILED with a clear, greppable
+        note, so `start_batch`'s insert can proceed normally instead
+        of raising `JobAlreadyRunningError` against a lock nothing is
+        actually holding anymore.
+    Inputs:
+        client: an already-constructed Supabase client.
+        job_name: the job_name about to attempt `start_batch`.
+    Outputs:
+        None. Has no effect if no RUNNING row exists, or if the
+        RUNNING row found is still within the stale-lock threshold
+        (left alone — that's a real concurrent run, not an orphan).
+    Failure modes:
+        Swallows its own errors (network, unexpected response shape)
+        rather than raising — this is a best-effort self-healing step
+        layered in front of the guard, not a replacement for it. If
+        this check itself fails for any reason, `start_batch` still
+        falls through to its normal insert-and-let-the-unique-index-
+        decide behavior, so a bug here can never weaken the guard,
+        only fail to pre-empt it.
+    """
+    try:
+        response = (
+            client.table("ingestion_batches")
+            .select("id,started_at")
+            .eq("job_name", job_name)
+            .eq("status", IngestionBatchStatus.RUNNING.value)
+            .order("started_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+    except Exception:
+        return  # best-effort — fall through to the normal insert/guard path
+
+    rows = response.data or []
+    if not rows:
+        return
+
+    stuck_id = rows[0]["id"]
+    started_at_raw = rows[0]["started_at"]
+    try:
+        started_at = datetime.fromisoformat(started_at_raw.replace("Z", "+00:00"))
+    except Exception:
+        return  # unparseable timestamp — don't guess, leave the row alone
+
+    age_minutes = (datetime.now(timezone.utc) - started_at).total_seconds() / 60
+    if age_minutes < _STALE_LOCK_MINUTES:
+        return  # plausibly still a real, in-progress run — leave it alone
+
+    try:
+        client.table("ingestion_batches").update(
+            {
+                "status": IngestionBatchStatus.FAILED.value,
+                "completed_at": _utcnow_iso(),
+                "error_summary": (
+                    f"Auto-reaped: RUNNING for {age_minutes:.0f} min (threshold "
+                    f"{_STALE_LOCK_MINUTES} min) — almost certainly an orphaned lock "
+                    f"from a crashed/cancelled/timed-out run, not a genuine "
+                    f"in-progress job. Closed automatically by start_batch's "
+                    f"stale-lock check so a new run isn't blocked indefinitely."
+                ),
+            }
+        ).eq("id", stuck_id).eq("status", IngestionBatchStatus.RUNNING.value).execute()
+    except Exception:
+        return  # best-effort — if this update fails, fall through as before
+
+
 # =============================================================================
 # ULID generation (Master Build Specification §3)
 # =============================================================================
@@ -184,6 +272,7 @@ def start_batch(
         constraint violation, RLS blocking the write).
     """
     batch_id = generate_ulid()
+    _reap_stale_running_lock(client, job_name=job_name)
     payload = {
         "id": batch_id,
         "job_name": job_name,

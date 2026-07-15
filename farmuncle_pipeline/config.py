@@ -183,6 +183,29 @@ class ApiCallStatus(str, Enum):
     SUCCESS = "SUCCESS"
     FAILURE = "FAILURE"
 
+class AlertSeverity(str, Enum):
+    """Matches quality_alerts.severity CHECK (chk_quality_alerts_severity)."""
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+    CRITICAL = "CRITICAL"
+
+
+class AlertStatus(str, Enum):
+    """Matches quality_alerts.status CHECK (chk_quality_alerts_status)."""
+    OPEN = "OPEN"
+    ACKNOWLEDGED = "ACKNOWLEDGED"
+    RESOLVED = "RESOLVED"
+
+
+class AlertEntityType(str, Enum):
+    """Matches quality_alerts.entity_type CHECK
+    (chk_quality_alerts_entity_type) — nullable; only set when an
+    alert is about one specific mandi or crop, not an aggregate
+    finding (duplicate rows, coverage gaps, retry-queue backlog)."""
+    MANDI = "mandi"
+    CROP = "crop"
+
 
 # =============================================================================
 # Government API constants

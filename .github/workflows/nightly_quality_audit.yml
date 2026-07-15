@@ -1,0 +1,45 @@
+name: nightly_quality_audit
+
+# Phase D, Step 19 (Master Build Spec §21) — ghost-entity, duplicate,
+# review-backlog, and date-coverage checks, written to
+# coverage_reports/quality_alerts (§26 success criteria).
+#
+# Scheduled for 00:00 IST (18:30 UTC) — after daily_rewrite (14:30 UTC
+# / 20:00 IST) has finalized the day's Resource 2 data and after
+# retry_failed_pages' evening run (16:00 UTC) has had its chance to
+# clear the day's failed pages, so this audit sees the freshest
+# possible state rather than flagging things that were already about
+# to resolve on their own within the hour.
+on:
+  schedule:
+    - cron: "30 18 * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: nightly-quality-audit
+  cancel-in-progress: false # see live_tick.yml for why
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15 # read-only queries against existing tables/views — should be seconds, not minutes
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      - name: Run nightly_quality_audit
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DATA_GOV_API_KEY: ${{ secrets.DATA_GOV_API_KEY }}
+          HISTORY_SUPABASE_URL: ${{ secrets.HISTORY_SUPABASE_URL }}
+          HISTORY_SUPABASE_SERVICE_KEY: ${{ secrets.HISTORY_SUPABASE_SERVICE_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: python -m farmuncle_pipeline.ops.nightly_quality_audit

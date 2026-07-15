@@ -1,0 +1,30 @@
+name: tests
+
+# Phase D.5 — runs the pytest suite (tests/) on every push and pull
+# request to main. Deliberately separate from the scheduled ingestion
+# workflows (live_tick.yml, daily_rewrite.yml, etc.) — this needs no
+# Supabase secrets at all, since every test under tests/ uses a fake
+# in-memory client (see tests/fakes.py) rather than touching the real
+# database.
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch: {}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements-dev.txt
+
+      - name: Run pytest
+        run: python -m pytest tests/ -v

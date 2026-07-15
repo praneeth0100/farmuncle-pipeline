@@ -425,13 +425,26 @@ def _insert_coverage_report(
             "missing_dates": summary.missing_dates,
         },
     }
+    # coverage_reports has a UNIQUE(report_date, scope) constraint —
+    # one report per scope per day. A plain insert() throws 23505 on
+    # any second run for the same date (e.g. a manual
+    # workflow_dispatch re-run, or a retry after a transient
+    # failure), so this upserts on that exact conflict target instead:
+    # the latest run for a given day wins and overwrites the earlier
+    # one's counts, which is the right behavior for a report that
+    # describes "current state as of today," not a log of every
+    # attempt.
     try:
-        result = supabase.table("coverage_reports").insert(payload).execute()
+        result = (
+            supabase.table("coverage_reports")
+            .upsert(payload, on_conflict="report_date,scope")
+            .execute()
+        )
     except Exception as exc:
-        raise ConfigError(f"Failed to insert coverage_reports row: {exc}") from exc
+        raise ConfigError(f"Failed to upsert coverage_reports row: {exc}") from exc
     rows = result.data or []
     if not rows:
-        raise ConfigError("coverage_reports insert returned no row — cannot link quality_alerts to it.")
+        raise ConfigError("coverage_reports upsert returned no row — cannot link quality_alerts to it.")
     return rows[0]["id"]
 
 

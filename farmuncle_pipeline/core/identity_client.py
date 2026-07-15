@@ -241,6 +241,56 @@ class IdentityClient:
             "crop_rpc_calls": self._crop_rpc_calls,
         }
 
+    # Supabase/PostgREST caps unranged selects at a default row limit
+    # (commonly 1000) — a plain `.select().execute()` on a table larger
+    # than that silently truncates rather than erroring. `mandis` grew
+    # past that threshold (2,835 active rows as of 2026-07-15) while
+    # `crops` (345) stayed under it, which is exactly why preload's
+    # crop-side hit rate was ~100% but its mandi-side hit rate was only
+    # ~40% — roughly two-thirds of mandis were never being loaded into
+    # the snapshot at all, not failing to match once loaded. Every
+    # preload query goes through `_fetch_all_rows` for this reason, even
+    # ones (like `crops`) that are safely under the limit today — a
+    # table crossing the threshold later should not silently reintroduce
+    # this same bug.
+    _PAGE_SIZE = 1000
+
+    def _fetch_all_rows(
+        self, table_name: str, columns: str, eq_filters: dict | None = None
+    ) -> list[dict]:
+        """
+        Purpose:
+            Fetch every row of `table_name` matching `eq_filters`,
+            paging through `.range()` in `_PAGE_SIZE`-row chunks so
+            results are never silently truncated by PostgREST's default
+            row cap — see the `_PAGE_SIZE` comment above for why this
+            matters specifically for `preload()`.
+        Inputs:
+            table_name: table to query.
+            columns: comma-separated column list for `.select()`.
+            eq_filters: optional dict of column->value equality filters
+                applied before paging (e.g. `{"status": "ACTIVE"}`).
+        Outputs:
+            A list of every matching row, across as many pages as
+            needed. Empty list if the table/filter matches nothing.
+        Failure modes:
+            Propagates whatever the underlying client raises on a
+            failed `.execute()` — caught by `preload()`'s own
+            try/except, not here.
+        """
+        rows: list[dict] = []
+        offset = 0
+        while True:
+            query = self._client.table(table_name).select(columns)
+            for column, value in (eq_filters or {}).items():
+                query = query.eq(column, value)
+            page = (query.range(offset, offset + self._PAGE_SIZE - 1).execute()).data or []
+            rows.extend(page)
+            if len(page) < self._PAGE_SIZE:
+                break
+            offset += self._PAGE_SIZE
+        return rows
+
     def preload(self) -> None:
         """
         Purpose:
@@ -268,28 +318,18 @@ class IdentityClient:
             later.
         """
         try:
-            mandi_rows = (
-                self._client.table("mandis")
-                .select("id,normalized_name,state,district")
-                .eq("status", "ACTIVE")
-                .execute()
-            ).data or []
-            mandi_alias_rows = (
-                self._client.table("mandi_aliases")
-                .select("mandi_id,normalized_alias")
-                .execute()
-            ).data or []
-            crop_rows = (
-                self._client.table("crops")
-                .select("id,normalized_name")
-                .eq("status", "ACTIVE")
-                .execute()
-            ).data or []
-            crop_alias_rows = (
-                self._client.table("crop_aliases")
-                .select("crop_id,normalized_alias")
-                .execute()
-            ).data or []
+            mandi_rows = self._fetch_all_rows(
+                "mandis", "id,normalized_name,state,district", {"status": "ACTIVE"}
+            )
+            mandi_alias_rows = self._fetch_all_rows(
+                "mandi_aliases", "mandi_id,normalized_alias"
+            )
+            crop_rows = self._fetch_all_rows(
+                "crops", "id,normalized_name", {"status": "ACTIVE"}
+            )
+            crop_alias_rows = self._fetch_all_rows(
+                "crop_aliases", "crop_id,normalized_alias"
+            )
         except Exception as exc:
             raise ConfigError(f"IdentityClient.preload failed: {exc}") from exc
 

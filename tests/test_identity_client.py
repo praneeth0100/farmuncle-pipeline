@@ -106,6 +106,7 @@ def test_normalize_variety(raw, expected):
 class _FakeTable:
     def __init__(self, rows: list[dict]):
         self._rows = rows
+        self._range: tuple[int, int] | None = None
 
     def select(self, *_a, **_k):
         return self
@@ -113,8 +114,18 @@ class _FakeTable:
     def eq(self, *_a, **_k):
         return self
 
+    def range(self, start: int, end: int):
+        # Mirrors real Supabase/PostgREST `.range()`: inclusive start/end
+        # row indices. Without this, the fake can't reproduce the
+        # default-row-cap bug that motivated `_fetch_all_rows`.
+        self._range = (start, end)
+        return self
+
     def execute(self):
-        return FakeResponse(data=self._rows)
+        if self._range is None:
+            return FakeResponse(data=self._rows)
+        start, end = self._range
+        return FakeResponse(data=self._rows[start : end + 1])
 
 
 class _FakeRpcCall:
@@ -348,6 +359,57 @@ def test_stats_counts_crop_cache_preload_and_rpc_tiers_separately():
     assert stats["mandi_cache_hits"] == 0
     assert stats["mandi_preload_hits"] == 0
     assert stats["mandi_rpc_calls"] == 0
+
+
+# =============================================================================
+# preload() pagination — the 2026-07-15 default-row-cap bug
+# =============================================================================
+
+def test_preload_fetches_more_than_one_page_of_mandis():
+    # 2,300 mandis is deliberately > IdentityClient._PAGE_SIZE (1000),
+    # reproducing the real bug: an unranged select silently truncated
+    # to the first page, so most mandis were never in the snapshot and
+    # every one of them paid a full RPC round trip, every single day.
+    mandis = [
+        {"id": i, "normalized_name": f"mandi {i}", "state": "Andhra Pradesh", "district": None}
+        for i in range(2300)
+    ]
+    client = FakeIdentityDBClient(mandis=mandis, rpc_responses={"find_or_create_mandi": -1})
+    identity = IdentityClient(client)
+    identity.preload()
+
+    # A mandi that only existed on the third page (past two 1000-row
+    # pages) must still resolve via preload, not fall through to RPC.
+    result = identity.resolve_mandi(name="Mandi 2299", state="Andhra Pradesh", district=None, source=Source.RESOURCE_2)
+    assert result.id == 2299
+    assert client.rpc_calls == []
+
+
+def test_preload_fetches_more_than_one_page_of_mandi_aliases():
+    aliases = [
+        {"mandi_id": i, "normalized_alias": f"alias {i}"} for i in range(2300)
+    ]
+    client = FakeIdentityDBClient(mandi_aliases=aliases, rpc_responses={"find_or_create_mandi": -1})
+    identity = IdentityClient(client)
+    identity.preload()
+
+    result = identity.resolve_mandi(name="Alias 2299", state="Andhra Pradesh", district=None, source=Source.RESOURCE_2)
+    assert result.id == 2299
+    assert client.rpc_calls == []
+
+
+def test_preload_pagination_stops_exactly_on_a_page_boundary():
+    # Exactly PAGE_SIZE rows (1000) must not trigger a spurious extra
+    # request for a phantom second page.
+    mandis = [
+        {"id": i, "normalized_name": f"mandi {i}", "state": "Andhra Pradesh", "district": None}
+        for i in range(1000)
+    ]
+    client = FakeIdentityDBClient(mandis=mandis)
+    identity = IdentityClient(client)
+    identity.preload()
+
+    assert len(identity._mandi_exact) == 1000
 
 
 # =============================================================================

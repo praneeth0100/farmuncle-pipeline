@@ -288,6 +288,69 @@ def test_resolve_crop_run_cache_hit_skips_second_rpc_call():
 
 
 # =============================================================================
+# stats() — hit/miss counters (Fix #1 follow-up)
+# =============================================================================
+
+def test_stats_starts_at_zero_for_all_six_counters():
+    identity = IdentityClient(FakeIdentityDBClient())
+
+    assert identity.stats() == {
+        "mandi_cache_hits": 0,
+        "mandi_preload_hits": 0,
+        "mandi_rpc_calls": 0,
+        "crop_cache_hits": 0,
+        "crop_preload_hits": 0,
+        "crop_rpc_calls": 0,
+    }
+
+
+def test_stats_counts_mandi_cache_preload_and_rpc_tiers_separately():
+    client = FakeIdentityDBClient(
+        mandis=[{"id": 42, "normalized_name": "guntur apmc", "state": "Andhra Pradesh", "district": "Guntur"}],
+        rpc_responses={"find_or_create_mandi": 888},
+    )
+    identity = IdentityClient(client)
+    identity.preload()
+
+    # One preload hit...
+    identity.resolve_mandi(name="Guntur APMC", state="Andhra Pradesh", district="Guntur", source=Source.RESOURCE_2)
+    # ...one RPC fallback for a genuinely new name...
+    identity.resolve_mandi(name="Brand New Mandi", state="Andhra Pradesh", district="Guntur", source=Source.RESOURCE_2)
+    # ...and a repeat of the new name should now be a run-cache hit.
+    identity.resolve_mandi(name="Brand New Mandi", state="Andhra Pradesh", district="Guntur", source=Source.RESOURCE_2)
+
+    stats = identity.stats()
+    assert stats["mandi_preload_hits"] == 1
+    assert stats["mandi_rpc_calls"] == 1
+    assert stats["mandi_cache_hits"] == 1
+    # Crop counters are untouched by mandi resolutions.
+    assert stats["crop_cache_hits"] == 0
+    assert stats["crop_preload_hits"] == 0
+    assert stats["crop_rpc_calls"] == 0
+
+
+def test_stats_counts_crop_cache_preload_and_rpc_tiers_separately():
+    client = FakeIdentityDBClient(
+        crops=[{"id": 10, "normalized_name": "tomato"}],
+        rpc_responses={"find_or_create_crop": 999},
+    )
+    identity = IdentityClient(client)
+    identity.preload()
+
+    identity.resolve_crop(name="Tomato", unit="kg", source=Source.RESOURCE_2)  # preload hit
+    identity.resolve_crop(name="Brand New Crop", unit="kg", source=Source.RESOURCE_2)  # rpc
+    identity.resolve_crop(name="Brand New Crop", unit="kg", source=Source.RESOURCE_2)  # cache hit
+
+    stats = identity.stats()
+    assert stats["crop_preload_hits"] == 1
+    assert stats["crop_rpc_calls"] == 1
+    assert stats["crop_cache_hits"] == 1
+    assert stats["mandi_cache_hits"] == 0
+    assert stats["mandi_preload_hits"] == 0
+    assert stats["mandi_rpc_calls"] == 0
+
+
+# =============================================================================
 # resolve_variety — pure local normalization, never an RPC
 # =============================================================================
 

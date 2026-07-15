@@ -188,6 +188,59 @@ class IdentityClient:
         self._crop_exact: dict[str, int] = {}
         self._crop_alias: dict[str, int] = {}
 
+        # Hit/miss counters (2026-07-15, Fix #1 follow-up — see `stats()`
+        # docstring). Deliberately three buckets per entity type, not one
+        # "hit/miss" bool, because the whole open question after Fix #1's
+        # under-delivery (measured ~30-40% reduction, not the expected
+        # order-of-magnitude) is WHERE resolution time is still going:
+        # run-cache hits and preload hits are both free (no RPC), but if
+        # `rpc_calls` is still high after `preload()` ran, that says the
+        # preload snapshot itself isn't matching most rows — a different
+        # problem (e.g. normalization mismatch, or genuinely high entity
+        # churn) than "preload works but something else is slow".
+        self._mandi_cache_hits = 0
+        self._mandi_preload_hits = 0
+        self._mandi_rpc_calls = 0
+        self._crop_cache_hits = 0
+        self._crop_preload_hits = 0
+        self._crop_rpc_calls = 0
+
+    def stats(self) -> dict[str, int]:
+        """
+        Purpose:
+            Report how this run's mandi/crop resolutions were actually
+            satisfied — run-cache hit, preload-snapshot hit, or a real
+            `find_or_create_*` RPC call — broken out separately for
+            mandis and crops. Diagnostic instrumentation for the Fix #1
+            follow-up investigation (module docstring's "Preload
+            snapshot" section): preload landed 2026-07-14 and measured
+            only a ~30-40% identity-time reduction against an expected
+            order-of-magnitude one. This is the first concrete step
+            toward finding out why — a caller can now tell whether a
+            slow run is still hitting the RPC a lot (preload isn't
+            matching) or hitting the preload snapshot fine (the cost is
+            elsewhere, e.g. `resolve_variety`/network latency/something
+            not measured here at all).
+        Inputs:
+            None.
+        Outputs:
+            A dict with six keys: `mandi_cache_hits`, `mandi_preload_hits`,
+            `mandi_rpc_calls`, `crop_cache_hits`, `crop_preload_hits`,
+            `crop_rpc_calls`. Safe to call at any point in a run (e.g.
+            mid-run for a progress check, or after for a final report);
+            counters only ever increase.
+        Failure modes:
+            None raised.
+        """
+        return {
+            "mandi_cache_hits": self._mandi_cache_hits,
+            "mandi_preload_hits": self._mandi_preload_hits,
+            "mandi_rpc_calls": self._mandi_rpc_calls,
+            "crop_cache_hits": self._crop_cache_hits,
+            "crop_preload_hits": self._crop_preload_hits,
+            "crop_rpc_calls": self._crop_rpc_calls,
+        }
+
     def preload(self) -> None:
         """
         Purpose:
@@ -290,6 +343,7 @@ class IdentityClient:
         """
         key = (name, state, district)
         if key in self._mandi_cache:
+            self._mandi_cache_hits += 1
             return ResolvedEntity(id=self._mandi_cache[key], first_seen_this_run=False)
 
         if self._preloaded:
@@ -299,6 +353,7 @@ class IdentityClient:
                 preload_id = self._mandi_alias.get(normalized)
             if preload_id is not None:
                 self._mandi_cache[key] = preload_id
+                self._mandi_preload_hits += 1
                 return ResolvedEntity(id=preload_id, first_seen_this_run=False)
 
         try:
@@ -320,6 +375,7 @@ class IdentityClient:
 
         mandi_id = result.data
         self._mandi_cache[key] = mandi_id
+        self._mandi_rpc_calls += 1
         return ResolvedEntity(id=mandi_id, first_seen_this_run=True)
 
     def resolve_crop(self, *, name: str, unit: str, source: Source) -> ResolvedEntity:
@@ -344,6 +400,7 @@ class IdentityClient:
             Raises `ConfigError` if the RPC call itself fails.
         """
         if name in self._crop_cache:
+            self._crop_cache_hits += 1
             return ResolvedEntity(id=self._crop_cache[name], first_seen_this_run=False)
 
         if self._preloaded:
@@ -353,6 +410,7 @@ class IdentityClient:
                 preload_id = self._crop_alias.get(normalized)
             if preload_id is not None:
                 self._crop_cache[name] = preload_id
+                self._crop_preload_hits += 1
                 return ResolvedEntity(id=preload_id, first_seen_this_run=False)
 
         try:
@@ -365,6 +423,7 @@ class IdentityClient:
 
         crop_id = result.data
         self._crop_cache[name] = crop_id
+        self._crop_rpc_calls += 1
         return ResolvedEntity(id=crop_id, first_seen_this_run=True)
 
     def resolve_variety(self, raw_variety: str) -> str:

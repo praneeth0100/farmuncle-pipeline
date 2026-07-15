@@ -88,7 +88,14 @@ class PipelineResult:
     a per-date breakdown instead of guessing where time went. This is
     diagnostic instrumentation, not a permanent fix — see
     HANDOUT_backfill_performance.md for the investigation this
-    supports."""
+    supports.
+
+    identity_stats (added 2026-07-15, Fix #1 follow-up): the
+    `IdentityClient.stats()` snapshot for this date's run — see that
+    method's docstring. Answers the next question after
+    identity_seconds alone: not just "how long did identity resolution
+    take" but "was it slow because the preload snapshot isn't matching,
+    or is preload working fine and the cost is elsewhere"."""
     batch_id: str
     target_date: date
     final_status: IngestionBatchStatus
@@ -103,6 +110,7 @@ class PipelineResult:
     fetch_seconds: float
     identity_seconds: float
     upsert_seconds: float
+    identity_stats: dict[str, int]
 
 
 def _fetch_all_resource_2_pages(
@@ -420,6 +428,7 @@ def ingest_resource2_for_date(ctx, *, target_date: date, job_name: str) -> Pipel
             fetch_seconds=fetch_seconds,
             identity_seconds=identity_seconds,
             upsert_seconds=upsert_seconds,
+            identity_stats=identity.stats(),
         )
 
     except Exception as exc:

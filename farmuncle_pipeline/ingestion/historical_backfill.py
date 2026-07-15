@@ -178,7 +178,13 @@ def run_historical_backfill(ctx, *, start_date: date, end_date: date) -> None:
             f"{result.states_with_any_success}/{len(STATES)} states yielded data, "
             f"{result.pages_fetched} page(s) fetched -- "
             f"timing: fetch={result.fetch_seconds:.1f}s, identity={result.identity_seconds:.1f}s, "
-            f"upsert={result.upsert_seconds:.1f}s"
+            f"upsert={result.upsert_seconds:.1f}s -- "
+            f"identity resolution: mandi cache={result.identity_stats['mandi_cache_hits']}/"
+            f"preload={result.identity_stats['mandi_preload_hits']}/"
+            f"rpc={result.identity_stats['mandi_rpc_calls']}, "
+            f"crop cache={result.identity_stats['crop_cache_hits']}/"
+            f"preload={result.identity_stats['crop_preload_hits']}/"
+            f"rpc={result.identity_stats['crop_rpc_calls']}"
         )
 
     total = succeeded + partial + failed

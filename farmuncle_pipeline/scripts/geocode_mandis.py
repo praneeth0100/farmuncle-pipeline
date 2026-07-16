@@ -83,7 +83,11 @@ def google_lookup(query: str):
 def geocode_mandi(name: str, district: str, state: str):
     """
     Returns (lat, lng, location_confidence, source) or (None, None, None, None)
-    Tries OSM market-level -> OSM district-level -> Google market-level -> OSM state-level.
+    Tries OSM market-level -> Google market-level -> OSM district-level -> OSM state-level.
+
+    District/state-level OSM results are only used as an absolute last resort
+    (all EXACT-precision options exhausted), since stacking many mandis on one
+    district-center point isn't useful on a map.
     """
     district = district or ""
     state = state or ""
@@ -94,21 +98,22 @@ def geocode_mandi(name: str, district: str, state: str):
     if lat and lng:
         return lat, lng, "EXACT", "osm"
 
-    # 2. OSM district-level
-    if district:
-        lat, lng = osm_lookup(f"{district}, {state}, India")
-        time.sleep(OSM_SLEEP_SECONDS)
-        if lat and lng:
-            return lat, lng, "DISTRICT", "osm"
-
-    # 3. Google market-level fallback (paid, only if OSM fully missed the market)
+    # 2. Google market-level (paid fallback, still EXACT precision - try this before
+    #    giving up to district-level, since a district-center pin isn't useful)
     if GOOGLE_API_KEY:
         lat, lng = google_lookup(f"{name}, {district}, {state}, India")
         time.sleep(GOOGLE_SLEEP_SECONDS)
         if lat and lng:
             return lat, lng, "EXACT", "google"
 
-    # 4. OSM state-level (last resort, at least puts the mandi in the right state)
+    # 3. OSM district-level (last resort before giving up entirely)
+    if district:
+        lat, lng = osm_lookup(f"{district}, {state}, India")
+        time.sleep(OSM_SLEEP_SECONDS)
+        if lat and lng:
+            return lat, lng, "DISTRICT", "osm"
+
+    # 4. OSM state-level (absolute last resort)
     if state:
         lat, lng = osm_lookup(f"{state}, India")
         time.sleep(OSM_SLEEP_SECONDS)

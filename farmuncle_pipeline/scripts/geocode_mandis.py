@@ -126,7 +126,8 @@ def run():
     query = supabase.table("mandis") \
         .select("id, name, district, state") \
         .is_("latitude", "null") \
-        .eq("status", "ACTIVE")
+        .eq("status", "ACTIVE") \
+        .range(0, 19999)  # override Supabase's default 1000-row cap
     if limit:
         query = query.limit(int(limit))
     mandis = query.execute()

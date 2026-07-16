@@ -1,0 +1,44 @@
+name: geocode_mandis
+
+# One-off / re-runnable backfill: fills lat/lng for ACTIVE mandis with no
+# coordinates. OSM (Nominatim) first, Google Geocoding API as paid fallback
+# only for mandis OSM can't find. Writes go through the update_mandi_location
+# RPC (audit trail via entity_history, never downgrades an existing better
+# location_confidence).
+#
+# Manually triggered only - this isn't a recurring ingestion job like
+# live_tick/daily_rewrite. Use the "limit" input to test on a small batch
+# before running the full ~2,860 mandis.
+
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Max mandis to geocode this run (blank = all remaining)"
+        required: false
+        default: ""
+
+concurrency:
+  group: geocode-mandis
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180 # OSM alone is ~1 req/sec; a full run over ~2,860 mandis can take a couple hours
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      - name: Run geocode_mandis
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
+          GEOCODE_LIMIT: ${{ inputs.limit }}
+        run: python scripts/geocode_mandis.py

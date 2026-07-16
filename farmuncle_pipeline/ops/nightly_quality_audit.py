@@ -190,15 +190,47 @@ def _check_ghost_crops(supabase) -> tuple[list[Finding], int]:
 
 
 def _check_duplicate_business_keys(supabase) -> tuple[list[Finding], int]:
-    """Purpose: rows sharing (mandi_id, crop_id, variety, price_date),
-    via `v_audit_duplicate_price_keys` — should be structurally
-    impossible (upsert_price_rows dedupes in-memory before every chunk
-    upsert, and the table's own unique constraint would reject a true
-    duplicate insert). Checked as a safety net, not because a hit is
-    expected; a hit here would mean something upstream of the upsert
-    path changed in a way that defeated both protections at once,
-    which is exactly the kind of thing worth a CRITICAL alert rather
-    than silent trust that it can't happen."""
+    """Purpose: rows sharing (mandi_id, crop_id, variety, price_date)
+    should be structurally impossible -- `uq_prices_business_key`, a
+    UNIQUE constraint on exactly those four columns, already guarantees
+    it at the database level (upsert_price_rows's in-memory dedup is a
+    second, independent layer on top of that). Because the constraint
+    makes a duplicate genuinely impossible while it exists, the actual
+    thing worth checking nightly is narrower than "scan every row for
+    duplicates" -- it's "does the constraint still exist at all".
+
+    2026-07-16 fix: this used to run `v_audit_duplicate_price_keys`
+    directly, a GROUP BY over the whole of `mandi_daily_prices`. That
+    was fine at the row counts it was written against, but crossed the
+    nightly job's statement timeout once the historical_backfill runs
+    pushed the table past ~586k rows (measured: ~4.7s and climbing with
+    the table, for a query that can only ever return zero rows as long
+    as the constraint holds). The fix here is a two-tier check: first a
+    near-instant catalog lookup (`v_audit_business_key_constraint`,
+    <1ms regardless of table size -- it's a pg_constraint existence
+    check, not a data scan) confirming the constraint is still in
+    place. Only if that ever comes back false -- meaning someone
+    dropped/renamed the constraint and duplicates are now actually
+    possible -- does this fall back to the expensive full scan, to
+    report real offending rows in the alert. That fallback path is
+    expected to be dead code in practice; it exists so a constraint
+    change doesn't also blind this specific check.
+    """
+    try:
+        constraint_rows = (
+            supabase.table("v_audit_business_key_constraint")
+            .select("constraint_present")
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        raise ConfigError(f"Duplicate business-key check failed: {exc}") from exc
+
+    constraint_present = bool(constraint_rows) and bool(constraint_rows[0].get("constraint_present"))
+    if constraint_present:
+        return [], 0
+
     try:
         rows = (
             supabase.table("v_audit_duplicate_price_keys")
@@ -210,18 +242,21 @@ def _check_duplicate_business_keys(supabase) -> tuple[list[Finding], int]:
     except Exception as exc:
         raise ConfigError(f"Duplicate business-key check failed: {exc}") from exc
 
-    if not rows:
-        return [], 0
-
+    detail = (
+        f"; e.g. mandi_id={rows[0]['mandi_id']}, crop_id={rows[0]['crop_id']}, "
+        f"variety={rows[0]['variety']!r}, price_date={rows[0]['price_date']}, "
+        f"count={rows[0]['row_count']}"
+        if rows
+        else " (no duplicate rows yet, but nothing is stopping one now)"
+    )
     finding = Finding(
         error_code="AUDIT-003",
         severity=AlertSeverity.CRITICAL,
         message=(
-            f"{len(rows)} business-key(s) have duplicate rows in mandi_daily_prices "
-            f"(e.g. mandi_id={rows[0]['mandi_id']}, crop_id={rows[0]['crop_id']}, "
-            f"variety={rows[0]['variety']!r}, price_date={rows[0]['price_date']}, "
-            f"count={rows[0]['row_count']}) — should be structurally impossible, "
-            f"investigate the upsert path immediately."
+            f"uq_prices_business_key is missing from mandi_daily_prices -- duplicate "
+            f"business-key rows are no longer prevented at the database level"
+            f"{detail}. Investigate immediately: restore the constraint or determine "
+            f"why/how it was removed."
         ),
     )
     return [finding], len(rows)

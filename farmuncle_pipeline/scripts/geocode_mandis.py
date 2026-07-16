@@ -105,7 +105,91 @@ _FINE_GRAINED_COMPONENT_TYPES = {
 }
 
 
-def is_precise_enough(result: dict) -> bool:
+import re
+from difflib import SequenceMatcher
+
+# Generic suffix/filler words that appear in mandi names or Google's
+# address components but carry no place-identifying information.
+# Mirrors mandi_core_name() in the database (v_audit_coordinate_mismatch /
+# check_mandi_coordinate_mismatch trigger, 2026-07-17) so the script's
+# in-flight check and the DB's after-the-fact safety net agree on what
+# counts as "the same place" -- deliberately kept in sync rather than
+# each drifting its own definition of a core name.
+_CORE_NAME_FILLER_WORDS = {
+    "apmc", "mandi", "market", "committee", "sub-yard", "sub", "yard",
+    "vfpck", "grain", "veg", "new", "old", "north", "south", "main",
+    "tal", "taluka", "dist", "district", "agriculture", "produce",
+}
+
+
+def _normalize_place_token(s: str) -> str:
+    """Lowercase, strip whitespace/punctuation, so 'Sanwer' and 'sanwer,' compare equal."""
+    return re.sub(r"[^a-z0-9]", "", s.lower())
+
+
+def _core_name(raw: str) -> str:
+    """
+    Strip parentheticals and generic filler words to get a place's "core"
+    name for comparison, e.g. "Agriculture Produce Market Committee Katol"
+    -> "katol", "Melur(Uzhavar Sandhai )" -> "melur". This is the Python
+    mirror of the database's mandi_core_name() SQL function -- kept
+    logically identical (same filler-word list, same parenthetical strip)
+    so a result this script accepts or rejects agrees with what the DB
+    trigger would independently conclude about the same two names.
+    """
+    no_parens = re.sub(r"\([^)]*\)", " ", raw.lower())
+    tokens = [t for t in re.split(r"[^a-z0-9]+", no_parens) if t and t not in _CORE_NAME_FILLER_WORDS]
+    return " ".join(tokens)
+
+
+def _name_match_score(name_a: str, name_b: str) -> float:
+    """
+    Fuzzy match score between two core names, combining a whole-string
+    similarity ratio with a substring/containment check -- mirrors
+    mandi_name_match_score() in the database (plain trigram similarity
+    OR-ed with directional word_similarity). SequenceMatcher.ratio() here
+    plays the same "spelling drift" role as pg_trgm's similarity()
+    (catches "Kancheepuram" vs "Kanchipuram"), and the containment check
+    plays the same role as word_similarity (catches a short core name like
+    "sengaon" appearing as a genuine word inside a longer descriptive
+    core name like "sant namdev krushi bazar sengaon hingoli").
+    """
+    core_a, core_b = _core_name(name_a), _core_name(name_b)
+    if not core_a or not core_b:
+        return 0.0
+    ratio = SequenceMatcher(None, core_a, core_b).ratio()
+    words_a, words_b = set(core_a.split()), set(core_b.split())
+    contained = bool(words_a & words_b)  # any exact shared core word, e.g. "katol" in both
+    return max(ratio, 1.0 if contained else 0.0)
+
+
+def _query_place_tokens(query: str) -> set:
+    """
+    Extract the meaningful place-name token(s) we actually asked Google about,
+    from a query string like 'Konch APMC, Jalaun (Orai), Uttar Pradesh, India'.
+    We only care about the FIRST comma-separated segment (the mandi/place name
+    itself, before district/state/country) since that's the thing Google needs
+    to have actually resolved to -- not just any word appearing anywhere in the
+    query, which would also match on the district/state and defeat the point
+    of this check.
+    """
+    first_segment = query.split(",")[0]
+    core = _core_name(first_segment)
+    tokens = {_normalize_place_token(t) for t in core.split() if t.strip()}
+    return {t for t in tokens if len(t) >= 3}  # drop tiny tokens (initials, "of", etc.)
+
+
+def _result_locality_tokens(result: dict) -> set:
+    """All locality/village/etc-level component names from a Google result, normalized."""
+    tokens = set()
+    for c in result.get("address_components", []):
+        if set(c.get("types", [])) & _FINE_GRAINED_COMPONENT_TYPES:
+            tokens.add(_normalize_place_token(c.get("long_name", "")))
+            tokens.add(_normalize_place_token(c.get("short_name", "")))
+    return {t for t in tokens if t}
+
+
+def is_precise_enough(result: dict, query: str = "") -> bool:
     """
     Purpose:
         Reject any Google Geocoding result that isn't actually
@@ -118,17 +202,42 @@ def is_precise_enough(result: dict) -> bool:
         with no error to signal the difference. `location_type` and
         `address_components` are the only fields that actually reveal
         which case happened.
+
+        2026-07-17 revision: the original version of this check stopped
+        at "does a fine-grained component exist at all" -- but Google's
+        silent-widening failure mode doesn't just widen to DISTRICT
+        level, it can also widen to a *different nearby town or city*
+        that Google considers the "closest" indexed place, and that
+        substitute town still shows up as a genuine locality-level
+        component. A follow-up audit found this exact pattern: multiple
+        different mandi names in the same district all resolving to one
+        shared town's coordinates (e.g. Konch/Kalpi/Madhogarh all
+        landing on Orai; Indore(F&V) landing on Sanwer). The fine-grained
+        check alone can't catch this because the substitute IS a real,
+        precise place -- just not the one asked about. This revision
+        adds a name-match: at least one fine-grained component's name
+        must actually overlap with the place name tokens from the query
+        itself. If nothing overlaps, we reject even though a real
+        locality-level component is present, because we have no
+        confirmation Google resolved *our* place rather than a
+        substitute.
     Inputs:
         result: one entry from Google's `results` array (the raw dict,
             not just the lat/lng -- this needs `geometry.location_type`
             and `address_components`).
+        query: the exact query string sent to Google for this result,
+            used to extract the place-name tokens for the name-match
+            check. Optional for backward compatibility, but the name
+            check is skipped (i.e. old, weaker behavior) if omitted --
+            callers within this script always pass it.
     Outputs:
         True only if the result has at least one address component at
-        locality/village/town granularity or finer, AND (if Google
-        marked it APPROXIMATE) still has one of those components. False
-        for anything resolved only to district/state/country level, and
-        false for Google's own partial-match flag (an explicit signal
-        from Google itself that the query didn't cleanly match).
+        locality/village/town granularity or finer, that component's
+        name overlaps with the queried place name (when query is given),
+        AND (if Google marked it APPROXIMATE) still has one of those
+        components. False for anything resolved only to district/state/
+        country level, false for Google's own partial-match flag, and
+        false for a precise-but-mismatched substitute place.
     Failure modes:
         None raised -- malformed/missing fields just fall through to
         False via .get() defaults, which is the safe direction (reject,
@@ -146,6 +255,19 @@ def is_precise_enough(result: dict) -> bool:
         return False
     if not has_fine_grained:
         return False
+    if query:
+        query_place = query.split(",")[0]
+        locality_names = [
+            c.get("long_name", "")
+            for c in components
+            if set(c.get("types", [])) & _FINE_GRAINED_COMPONENT_TYPES
+        ]
+        # Same 0.3 threshold as the database's mandi_name_match_score /
+        # v_audit_coordinate_mismatch, validated against every real
+        # matched/mismatched pair found in the 2026-07-16/17 audits.
+        best_score = max((_name_match_score(query_place, ln) for ln in locality_names), default=0.0)
+        if best_score < 0.3:
+            return False
     return True
 
 
@@ -165,9 +287,10 @@ def google_lookup(query: str):
         status = data.get("status")
         if status == "OK" and data.get("results"):
             result = data["results"][0]
-            if not is_precise_enough(result):
+            if not is_precise_enough(result, query=query):
                 print(f"    Google returned a result for '{query}' but it's not "
-                      f"village/town-level precise (location_type="
+                      f"village/town-level precise or doesn't name-match "
+                      f"(location_type="
                       f"{result.get('geometry', {}).get('location_type')}) -- rejected.")
                 return None, None
             loc = result["geometry"]["location"]
@@ -257,7 +380,7 @@ def geocode_mandi(name: str, district: str, state: str):
     for q in candidate_queries:
         lat, lng = google_lookup(q)
         time.sleep(GOOGLE_SLEEP_SECONDS)
-        if lat and lng:
+        if lat is not None and lng is not None:
             return lat, lng, "EXACT", "google"
 
     # No precise hit on Google across any variant. Leave blank - do NOT
@@ -301,7 +424,7 @@ def run():
 
         lat, lng, confidence, source = geocode_mandi(mandi["name"], mandi["district"], mandi["state"])
 
-        if lat and lng:
+        if lat is not None and lng is not None:
             supabase.rpc("update_mandi_location", {
                 "p_mandi_id": mandi["id"],
                 "p_latitude": lat,

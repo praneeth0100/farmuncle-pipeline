@@ -12,7 +12,7 @@ Purpose (module-level):
     leaves a durable, queryable record behind instead of a chat
     transcript.
 
-    Six checks, chosen because each one was independently verified by
+    Seven checks, chosen because each one was independently verified by
     hand at least once already this project and is cheap to compute
     from tables that already exist:
       1. Ghost mandis   — ACTIVE mandis with zero mandi_daily_prices rows
@@ -21,13 +21,20 @@ Purpose (module-level):
          structurally impossible given upsert_price_rows' own
          in-memory dedup + the table's unique constraint; checked
          anyway as a safety net, not because a hit is expected.
-      4. Data-quality-issue backlog — PENDING data_quality_issues
+      4. Coordinate mismatches — two different ACTIVE mandis sharing
+         one exact geocoded point whose names don't look like variants
+         of the same place (see `_check_coordinate_mismatches` and the
+         `v_audit_coordinate_mismatch` view / `check_mandi_coordinate_
+         mismatch` trigger it complements — added 2026-07-17 after the
+         679-mandi and follow-up 32-mandi silent-substitution
+         incidents in geocode_mandis.py).
+      5. Data-quality-issue backlog — PENDING data_quality_issues
          (see review_quality_issues.py) older than
          `_STALE_REVIEW_DAYS` with no human triage yet.
-      5. Failed-page backlog — PENDING failed_pages older than
+      6. Failed-page backlog — PENDING failed_pages older than
          `_STALE_FAILED_PAGE_HOURS` that retry_failed_pages.py hasn't
          cleared on its own twice-daily schedule.
-      6. Date coverage gaps — any calendar date strictly between the
+      7. Date coverage gaps — any calendar date strictly between the
          earliest and latest `mandi_daily_prices.price_date` that has
          zero rows at all (a day that should have arrived and simply
          didn't, as opposed to genuinely not-yet-backfilled range).
@@ -134,6 +141,7 @@ class AuditSummary:
     ghost_mandis: int = 0
     ghost_crops: int = 0
     duplicate_business_keys: int = 0
+    coordinate_mismatches: int = 0
     stale_data_quality_issues: int = 0
     stale_failed_pages: int = 0
     missing_dates: list[str] = field(default_factory=list)
@@ -297,6 +305,58 @@ def _check_stale_data_quality_issues(supabase) -> tuple[list[Finding], int]:
     return [finding], count
 
 
+def _check_coordinate_mismatches(supabase) -> tuple[list[Finding], int]:
+    """Purpose: catch the "two different mandis silently share one
+    geocoded point" failure class that caused the 679-mandi incident
+    (2026-07-15/16) and its 32-mandi second wave (2026-07-16/17). This
+    is deliberately NOT dependent on geocode_mandis.py's own precision
+    logic being correct -- that logic has already been wrong twice.
+    Instead it reads `v_audit_coordinate_mismatch`, a view computed
+    straight from live table state: any two different ACTIVE mandis
+    sharing an identical (latitude, longitude) whose names don't look
+    like variants of the same place (`mandi_name_match_score` below
+    0.3 -- see the migration that created it for how that threshold was
+    picked and validated against every real pair found in the manual
+    audits). A `check_mandi_coordinate_mismatch` trigger on `mandis`
+    already auto-flags matching rows' `review_status` to NEEDS_REVIEW
+    the moment they're written; this check is the belt-and-suspenders
+    layer that turns any such row into a durable, escalating
+    `quality_alerts` entry, in case something bypasses that trigger
+    (e.g. a future bulk SQL import that disables triggers) or an
+    operator needs a single place to see the whole current list rather
+    than hunting for `review_status='NEEDS_REVIEW'` rows one at a time.
+    """
+    try:
+        rows = (
+            supabase.table("v_audit_coordinate_mismatch")
+            .select("mandi_id,mandi_name,conflicting_mandi_id,conflicting_mandi_name,latitude,longitude,name_similarity")
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:
+        raise ConfigError(f"Coordinate-mismatch check failed: {exc}") from exc
+
+    findings = [
+        Finding(
+            error_code="AUDIT-007",
+            severity=AlertSeverity.HIGH,
+            message=(
+                f"Mandi id={row['mandi_id']} ({row['mandi_name']!r}) shares coordinate "
+                f"({row['latitude']}, {row['longitude']}) with mandi id={row['conflicting_mandi_id']} "
+                f"({row['conflicting_mandi_name']!r}), name_match_score="
+                f"{round(row['name_similarity'], 3)} (< 0.3) -- these look like different "
+                f"places that silently collapsed onto one geocoded point. Investigate and "
+                f"reset the wrong one(s) to NULL for re-geocoding."
+            ),
+            entity_type=AlertEntityType.MANDI,
+            entity_id=row["mandi_id"],
+        )
+        for row in rows
+    ]
+    return findings, len(rows)
+
+
 def _check_stale_failed_pages(supabase) -> tuple[list[Finding], int]:
     """Purpose: PENDING failed_pages older than
     `_STALE_FAILED_PAGE_HOURS` — pages retry_failed_pages.py has had
@@ -455,6 +515,7 @@ def _insert_coverage_report(
             "ghost_mandis": summary.ghost_mandis,
             "ghost_crops": summary.ghost_crops,
             "duplicate_business_keys": summary.duplicate_business_keys,
+            "coordinate_mismatches": summary.coordinate_mismatches,
             "stale_data_quality_issues": summary.stale_data_quality_issues,
             "stale_failed_pages": summary.stale_failed_pages,
             "missing_dates": summary.missing_dates,
@@ -516,6 +577,9 @@ def run_nightly_quality_audit(ctx) -> None:
     dup_findings, summary.duplicate_business_keys = _check_duplicate_business_keys(supabase)
     all_findings.extend(dup_findings)
 
+    coord_mismatch_findings, summary.coordinate_mismatches = _check_coordinate_mismatches(supabase)
+    all_findings.extend(coord_mismatch_findings)
+
     stale_dqi_findings, summary.stale_data_quality_issues = _check_stale_data_quality_issues(supabase)
     all_findings.extend(stale_dqi_findings)
 
@@ -546,6 +610,7 @@ def run_nightly_quality_audit(ctx) -> None:
         f"{skipped_existing} already OPEN and left as-is.\n"
         f"  ghost_mandis={summary.ghost_mandis} ghost_crops={summary.ghost_crops} "
         f"duplicate_business_keys={summary.duplicate_business_keys} "
+        f"coordinate_mismatches={summary.coordinate_mismatches} "
         f"stale_data_quality_issues={summary.stale_data_quality_issues} "
         f"stale_failed_pages={summary.stale_failed_pages} "
         f"missing_dates={summary.missing_dates}"

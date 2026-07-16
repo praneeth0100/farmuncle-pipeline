@@ -77,6 +77,34 @@ def google_lookup(query: str):
     return None, None
 
 
+def extract_place_name(name: str):
+    """
+    Strip common market/organization suffixes to get the underlying
+    village/town name. E.g. "Amballur  VFPCK Market" -> "Amballur"
+
+    This matters for hyperlocal markets (like Kerala's VFPCK village
+    collection points) that aren't individually indexed on Google Maps
+    as businesses, but whose underlying village/town IS a real,
+    mappable place. Searching for the place name directly avoids Google
+    falling back to a shared district-level match for every market in
+    the area.
+    """
+    suffixes_to_strip = [
+        "vfpck market", "vfpck  market", "market", "apmc",
+        "sub-yard", "sub yard", "mandi",
+    ]
+    cleaned = name.strip()
+    cleaned_lower = cleaned.lower()
+    for suffix in suffixes_to_strip:
+        if cleaned_lower.endswith(suffix):
+            cleaned = cleaned[: len(cleaned) - len(suffix)].strip()
+            cleaned_lower = cleaned.lower()
+    # Drop trailing parenthetical qualifiers e.g. "Thalavadi(Uzhavar Sandhai )"
+    if "(" in cleaned:
+        cleaned = cleaned.split("(")[0].strip()
+    return cleaned
+
+
 def build_candidate_queries(name: str, district: str, state: str):
     """
     Build a list of market-level query variants to try, in order.
@@ -92,6 +120,15 @@ def build_candidate_queries(name: str, district: str, state: str):
     if district:
         # In case district is misspelled/wrong in our data, try without it
         queries.append(f"{name}, {state}, India")
+
+    # Fallback: search for the underlying village/town name itself,
+    # rather than the market name, since the village is a real indexed
+    # place even when the market business name is not. Only added if it
+    # actually differs from the full name (i.e. a suffix was stripped).
+    place_name = extract_place_name(name)
+    if place_name and place_name.lower() != name_lower:
+        queries.append(f"{place_name}, {district}, {state}, India")
+        queries.append(f"{place_name}, {state}, India")
 
     return queries
 
@@ -121,24 +158,36 @@ def geocode_mandi(name: str, district: str, state: str):
 
 
 def run():
-    limit = os.environ.get("GEOCODE_LIMIT")  # optional, e.g. "20" for a test run
     print("Loading ACTIVE mandis with no coordinates...")
-    query = supabase.table("mandis") \
-        .select("id, name, district, state") \
-        .is_("latitude", "null") \
-        .eq("status", "ACTIVE") \
-        .range(0, 19999)  # override Supabase's default 1000-row cap
-    if limit:
-        query = query.limit(int(limit))
-    mandis = query.execute()
+    limit = os.environ.get("GEOCODE_LIMIT")
 
-    total = len(mandis.data)
+    all_mandis = []
+    batch_size = 1000
+    offset = 0
+    while True:
+        batch = supabase.table("mandis") \
+            .select("id, name, district, state") \
+            .is_("latitude", "null") \
+            .eq("status", "ACTIVE") \
+            .range(offset, offset + batch_size - 1) \
+            .execute()
+        if not batch.data:
+            break
+        all_mandis.extend(batch.data)
+        if limit and len(all_mandis) >= int(limit):
+            all_mandis = all_mandis[:int(limit)]
+            break
+        if len(batch.data) < batch_size:
+            break  # last page was partial, no more rows
+        offset += batch_size
+
+    total = len(all_mandis)
     print(f"Found {total} mandis to geocode (Google-only, exact-match)")
 
     stats = {"EXACT": 0, "not_found": 0}
     not_found_rows = []
 
-    for i, mandi in enumerate(mandis.data):
+    for i, mandi in enumerate(all_mandis):
         label = f"{mandi['name']}, {mandi['district']}, {mandi['state']}"
         print(f"  [{i+1}/{total}] {label}")
 

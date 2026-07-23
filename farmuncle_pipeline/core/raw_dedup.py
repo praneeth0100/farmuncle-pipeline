@@ -52,6 +52,7 @@ def upsert_raw_price_entry(
     district: str | None,
     commodity: str,
     raw_variety: str,
+    raw_grade: str,
     price_date: str,  # ISO 'YYYY-MM-DD' -- matches parse_agmarknet_record's output
     modal_price,
     min_price,
@@ -65,9 +66,13 @@ def upsert_raw_price_entry(
     Inputs:
         resource: "resource_1" or "resource_2" (pass Resource.X.value,
             not the enum member itself).
-        market/state/district/commodity/raw_variety/price_date/
-            modal_price/min_price/max_price: the dict returned by
-            `parse_agmarknet_record`, unpacked.
+        market/state/district/commodity/raw_variety/raw_grade/
+            price_date/modal_price/min_price/max_price: the dict
+            returned by `parse_agmarknet_record`, unpacked. `raw_grade`
+            added 2026-07-22 -- may be an empty string (government
+            didn't report one for this record), matching the live RPC's
+            `p_raw_grade` and the `uq_raw_price_entries_identity`
+            index's `COALESCE(grade, '')` treatment of it.
         batch_id: the current run's `raw_api_batches.id`
             (`raw_batch_id` in the calling scripts) -- NOT
             `ingestion_batches.id`.
@@ -101,6 +106,7 @@ def upsert_raw_price_entry(
             "p_district": district or "",
             "p_commodity": commodity,
             "p_raw_variety": raw_variety or "",
+            "p_raw_grade": raw_grade or "",
             "p_price_date": price_date,
             "p_content_hash": content_hash,
             "p_payload": payload,
@@ -145,10 +151,17 @@ def upsert_raw_price_entries_batch(
         parser_version: `PARSER_VERSION` from `ingest_common`.
         parsed_records: a list of dicts, each shaped like
             `parse_agmarknet_record`'s return value (market, state,
-            district, commodity, raw_variety, price_date, modal_price,
-            min_price, max_price). Callers should skip `None` results
-            from `parse_agmarknet_record` before building this list.
-            If empty, this function is a no-op and makes no RPC call.
+            district, commodity, raw_variety, raw_grade, price_date,
+            modal_price, min_price, max_price). Callers should skip
+            `None` results from `parse_agmarknet_record` before
+            building this list. If empty, this function is a no-op and
+            makes no RPC call. NOTE (2026-07-22): the live
+            `upsert_raw_price_entries_batch` RPC reads this field as
+            `entry->>'grade'`, not `'raw_grade'` -- inconsistent with
+            the single-entry RPC's `p_raw_grade` parameter name, but
+            that inconsistency exists in the deployed RPC itself; this
+            function's entry-building below matches it exactly rather
+            than silently working around it.
 
     Outputs:
         (rows_written, rows_new) -- rows_written is the number of
@@ -179,6 +192,7 @@ def upsert_raw_price_entries_batch(
                 "district": parsed["district"] or "",
                 "commodity": parsed["commodity"],
                 "raw_variety": parsed["raw_variety"] or "",
+                "grade": parsed.get("raw_grade") or "",
                 "price_date": parsed["price_date"],
                 "content_hash": _content_hash(payload),
                 "payload": payload,

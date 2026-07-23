@@ -140,6 +140,29 @@ def _normalize_variety(raw_variety: str | None) -> str:
     return re.sub(r"\s+", " ", raw_variety.strip().lower()).strip()
 
 
+def _normalize_grade(raw_grade: str | None) -> str:
+    """Python mirror pattern for grade, same shape as
+    `_normalize_variety` above: blank/null -> 'other', else lowercase +
+    trim + collapse whitespace. Added 2026-07-21/22 alongside the
+    `mandi_daily_prices.grade` business-key fix.
+
+    Unlike `_normalize_variety`, there is no `normalize_grade` SQL
+    function at all — grade was never part of the original 4-function
+    normalize set (`normalize_market_name`/`normalize_crop_name`/
+    `normalize_variety`/`normalize_unit`). That means this mirror has
+    nothing server-side to drift out of sync with, by construction —
+    not because it was verified identical to something, but because
+    there's genuinely nothing on the other side to compare against.
+    If a `normalize_grade` RPC or a `grades` table lookup is ever
+    added server-side, this function needs to either be reconciled
+    against it or replaced with a real RPC call — don't assume this
+    stays correct by default the way `_normalize_variety` currently
+    does."""
+    if raw_grade is None or raw_grade.strip() == "":
+        return "other"
+    return re.sub(r"\s+", " ", raw_grade.strip().lower()).strip()
+
+
 @dataclass(frozen=True)
 class ResolvedEntity:
     """Purpose: an entity id plus whether resolving it required an RPC
@@ -176,6 +199,7 @@ class IdentityClient:
         self._mandi_cache: dict[tuple[str, str, str | None], int] = {}
         self._crop_cache: dict[str, int] = {}
         self._variety_cache: dict[str, str] = {}
+        self._grade_cache: dict[str, str] = {}
         self._unit_cache: dict[str, str] = {}
 
         # Preload snapshot state — empty/unused until `preload()` is
@@ -500,6 +524,40 @@ class IdentityClient:
 
         normalized = _normalize_variety(raw_variety)
         self._variety_cache[raw_variety] = normalized
+        return normalized
+
+    def resolve_grade(self, raw_grade: str) -> str:
+        """
+        Purpose:
+            Normalize a grade string, same treatment as
+            `resolve_variety` above. `mandi_daily_prices.grade` is a
+            plain `NOT NULL` text column, not FK'd to the `grades`
+            table — same shape as `variety`.
+
+            Design decision made 2026-07-21 (asked, confirmed):
+            deliberately does NOT call `find_or_create_grade`, even
+            though that RPC exists server-side. `find_or_create_grade`
+            requires a `p_variety_id`, which this pipeline has no way
+            to produce — `resolve_variety` above returns a normalized
+            *string*, not an id, because variety was never wired
+            through `find_or_create_variety` either (same reasoning,
+            same precedent, see that method's docstring). Wiring grade
+            through the RPC would require first wiring variety through
+            its RPC, which is a separate, larger design change than
+            this fix and was explicitly deferred, not overlooked.
+        Inputs:
+            raw_grade: grade string as reported by the government API
+                (frequently blank — not every commodity carries one).
+        Outputs:
+            Normalized grade string.
+        Failure modes:
+            None raised — pure string transformation.
+        """
+        if raw_grade in self._grade_cache:
+            return self._grade_cache[raw_grade]
+
+        normalized = _normalize_grade(raw_grade)
+        self._grade_cache[raw_grade] = normalized
         return normalized
 
     def resolve_unit(self, raw_unit: str) -> str:

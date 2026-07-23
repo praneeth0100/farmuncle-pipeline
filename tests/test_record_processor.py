@@ -62,6 +62,7 @@ _RESOURCE_1_RECORD = {
     "state": "Andhra Pradesh",
     "district": "Guntur",
     "variety": "FAQ",
+    "grade": "Non-FAQ",
     "arrival_date": "15/07/2026",
     "modal_price": "2500",
     "min_price": "2000",
@@ -77,6 +78,7 @@ _RESOURCE_2_RECORD = {
     "State": "Andhra Pradesh",
     "District": "Guntur",
     "Variety": "FAQ",
+    "Grade": "Non-FAQ",
     "Arrival_Date": "15/07/2026",
     "Modal_Price": "2500",
     "Min_Price": "2000",
@@ -120,6 +122,7 @@ def test_process_records_well_formed_record_produces_expected_row(record):
     assert row["mandi_id"] == 42
     assert row["crop_id"] == 10
     assert row["variety"] == "faq"
+    assert row["grade"] == "non-faq"
     assert row["price_date"] == "2026-07-15"
 
     # Price fields parsed to float.
@@ -164,6 +167,30 @@ def test_process_records_malformed_record_is_skipped_not_raised():
 
     assert result.price_rows == []
     assert result.rows_failed == 1
+
+
+def test_process_records_record_with_no_grade_reported_normalizes_to_other():
+    # Not every government record carries a Grade field (confirmed
+    # 2026-07-18: many F&V-type records omit it entirely) — this must
+    # normalize to "other" the same way a missing variety does
+    # (resolve_grade mirrors resolve_variety exactly), and must NOT
+    # cause the record to be treated as malformed.
+    record_without_grade = {k: v for k, v in _RESOURCE_1_RECORD.items() if k != "grade"}
+    identity = _make_identity(mandis=[_KNOWN_MANDI], crops=[_KNOWN_CROP])
+
+    result = process_records(
+        [record_without_grade],
+        identity=identity,
+        unit="kg",
+        source=Source.RESOURCE_1,
+        batch_id="batch-1",
+        raw_api_batch_id="raw-1",
+        job_name="test_job",
+    )
+
+    assert result.rows_failed == 0
+    assert len(result.price_rows) == 1
+    assert result.price_rows[0]["grade"] == "other"
 
 
 def test_process_records_identity_resolution_failure_is_skipped_not_raised(capsys):

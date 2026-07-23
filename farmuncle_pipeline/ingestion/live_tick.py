@@ -129,6 +129,7 @@ from farmuncle_pipeline.ingest_common import (
     validate_startup,
 )
 from farmuncle_pipeline.core.price_writer import filter_rows_by_precedence, upsert_price_rows
+from farmuncle_pipeline.core.price_cache import refresh_price_cache
 from farmuncle_pipeline.core.record_processor import process_records
 from farmuncle_pipeline.core.resource_client import PageFetchResult, fetch_page, parse_agmarknet_record
 JOB_NAME = "live_tick"
@@ -475,6 +476,13 @@ def run_live_tick(ctx) -> None:
             f"{pages_fetched} page(s) fetched"
             + ("" if pagination_complete else " (incomplete — see failed_pages / QUALITY-001 warnings above)")
         )
+
+        # §15 Cache Invalidation Policy: refresh price_cache after
+        # live_tick, but only when rows actually changed — an empty
+        # tick (nothing new since the last run) has nothing to
+        # invalidate. Non-fatal on failure; see price_cache.py.
+        if rows_processed > 0:
+            refresh_price_cache(supabase, caller="live_tick")
 
     except Exception as exc:
         error_summary = str(exc)[:500]

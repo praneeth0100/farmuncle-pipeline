@@ -85,8 +85,8 @@ def test_is_row_level_error_false_for_exception_with_no_code_attribute():
 # filter_rows_by_precedence
 # =============================================================================
 
-def _price_row(mandi_id=1, crop_id=1, variety="other", price_date="2026-07-15"):
-    return {"mandi_id": mandi_id, "crop_id": crop_id, "variety": variety, "price_date": price_date}
+def _price_row(mandi_id=1, crop_id=1, variety="other", grade=None, price_date="2026-07-15"):
+    return {"mandi_id": mandi_id, "crop_id": crop_id, "variety": variety, "grade": grade, "price_date": price_date}
 
 
 class _FakeSelectClient:

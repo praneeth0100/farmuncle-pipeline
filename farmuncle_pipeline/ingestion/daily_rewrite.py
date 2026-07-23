@@ -71,6 +71,7 @@ from datetime import datetime, timedelta, timezone
 from farmuncle_pipeline.core.batch_lifecycle import JobAlreadyRunningError
 from farmuncle_pipeline.ingest_common import ConfigError, IngestionBatchStatus, STATES, validate_startup
 from farmuncle_pipeline.core.resource2_pipeline import ingest_resource2_for_date
+from farmuncle_pipeline.core.price_cache import refresh_price_cache
 
 JOB_NAME = "daily_rewrite"
 _IST = timezone(timedelta(hours=5, minutes=30))
@@ -196,6 +197,13 @@ def run_daily_rewrite(ctx) -> None:
         )
         if offset == 0:
             todays_result = result
+
+    # §15 Cache Invalidation Policy: refresh price_cache after every
+    # daily_rewrite run, regardless of per-date outcome above — a
+    # partial window (some dates succeeded, some didn't) still means
+    # newer data may exist than what's currently cached. Non-fatal on
+    # failure; see price_cache.py docstring.
+    refresh_price_cache(ctx.supabase, caller="daily_rewrite")
 
     if todays_result is not None and todays_result.final_status == IngestionBatchStatus.FAILED:
         try:

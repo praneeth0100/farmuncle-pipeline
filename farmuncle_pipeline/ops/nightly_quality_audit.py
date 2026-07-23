@@ -242,7 +242,7 @@ def _check_duplicate_business_keys(supabase) -> tuple[list[Finding], int]:
     try:
         rows = (
             supabase.table("v_audit_duplicate_price_keys")
-            .select("mandi_id,crop_id,variety,price_date,row_count")
+            .select("mandi_id,crop_id,variety,grade,price_date,row_count")
             .execute()
             .data
             or []
@@ -252,8 +252,8 @@ def _check_duplicate_business_keys(supabase) -> tuple[list[Finding], int]:
 
     detail = (
         f"; e.g. mandi_id={rows[0]['mandi_id']}, crop_id={rows[0]['crop_id']}, "
-        f"variety={rows[0]['variety']!r}, price_date={rows[0]['price_date']}, "
-        f"count={rows[0]['row_count']}"
+        f"variety={rows[0]['variety']!r}, grade={rows[0].get('grade')!r}, "
+        f"price_date={rows[0]['price_date']}, count={rows[0]['row_count']}"
         if rows
         else " (no duplicate rows yet, but nothing is stopping one now)"
     )

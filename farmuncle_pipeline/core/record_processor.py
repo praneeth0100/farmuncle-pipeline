@@ -10,7 +10,12 @@ Purpose (module-level):
     variety through the RPC-backed `IdentityClient` (invariant 3 — no
     identity logic duplicated in Python), score its quality
     (`quality_scoring.compute_quality`), and assemble the row dict
-    `price_writer.upsert_price_rows` expects.
+    `price_writer.upsert_price_rows` expects — including `grade`,
+    resolved via `identity.resolve_grade` the same way `variety` is
+    (local normalization, not `find_or_create_grade` — see that
+    method's docstring in identity_client.py for why). `grade` may
+    normalize to `"other"` when the government record didn't report
+    one for this row.
 
     This exact sequence appeared inline, identically, in both
     `live_tick.py` (Step 14, Resource 1) and `resource2_pipeline.py`
@@ -109,6 +114,7 @@ def process_records(
             )
             crop = identity.resolve_crop(name=parsed["commodity"], unit=unit, source=source)
             variety = identity.resolve_variety(parsed["raw_variety"])
+            grade = identity.resolve_grade(parsed["raw_grade"])
         except ConfigError as exc:
             print(f"[{job_name}] identity resolution failed, skipping row: {exc}")
             rows_failed += 1
@@ -129,6 +135,7 @@ def process_records(
                 "mandi_id": mandi.id,
                 "crop_id": crop.id,
                 "variety": variety,
+                "grade": grade,
                 "price_date": parsed["price_date"],
                 "modal_price": parsed["modal_price"],
                 "min_price": parsed["min_price"],

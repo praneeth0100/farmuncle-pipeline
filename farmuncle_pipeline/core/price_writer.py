@@ -126,8 +126,11 @@ def filter_rows_by_precedence(client, rows: list[dict], new_source: Source) -> t
     Inputs:
         client: an already-constructed Supabase client.
         rows: row dicts as built by the caller (must each contain
-            mandi_id/crop_id/variety/price_date — the same four fields
-            that make up `mandi_daily_prices`' business key).
+            mandi_id/crop_id/variety/grade/price_date — the same five
+            fields that make up `mandi_daily_prices`' business key,
+            `uq_prices_business_key`. `grade` may be `None`/missing;
+            compared via `or ""` so two "no grade reported" rows
+            still correctly collide with each other).
         new_source: the `Source` all of `rows` share (a single script
             run only ever writes one source).
     Outputs:
@@ -151,7 +154,7 @@ def filter_rows_by_precedence(client, rows: list[dict], new_source: Source) -> t
     try:
         response = (
             client.table("mandi_daily_prices")
-            .select("mandi_id,crop_id,variety,price_date,source")
+            .select("mandi_id,crop_id,variety,grade,price_date,source")
             .in_("price_date", price_dates)
             .execute()
         )
@@ -163,13 +166,25 @@ def filter_rows_by_precedence(client, rows: list[dict], new_source: Source) -> t
 
     existing_rank: dict[tuple, int] = {}
     for existing in response.data or []:
-        key = (existing["mandi_id"], existing["crop_id"], existing["variety"], existing["price_date"])
+        key = (
+            existing["mandi_id"],
+            existing["crop_id"],
+            existing["variety"],
+            existing.get("grade") or "",
+            existing["price_date"],
+        )
         existing_rank[key] = _SOURCE_RANK.get(existing["source"], 0)
 
     kept: list[dict] = []
     skipped = 0
     for row in rows:
-        key = (row["mandi_id"], row["crop_id"], row["variety"], row["price_date"])
+        key = (
+            row["mandi_id"],
+            row["crop_id"],
+            row["variety"],
+            row.get("grade") or "",
+            row["price_date"],
+        )
         if existing_rank.get(key, 0) > new_rank:
             skipped += 1
             continue
@@ -191,10 +206,15 @@ def upsert_price_rows(
         Upsert parsed price rows into `mandi_daily_prices` in chunks of
         `batch_size` (from system_config, not a hardcoded constant).
         Deduplicates by the table's actual business key first, since
-        two records for the same (mandi, crop, variety, date) within
-        one run would otherwise both attempt to occupy the same
+        two records for the same (mandi, crop, variety, grade, date)
+        within one run would otherwise both attempt to occupy the same
         upserted row — the last one wins, matching Postgres
-        `ON CONFLICT` semantics for a batch upsert.
+        `ON CONFLICT` semantics for a batch upsert. `grade` joined this
+        key 2026-07-21/22: before that, two real rows differing ONLY
+        by grade (e.g. FAQ vs Non-FAQ onion, same mandi/variety/day —
+        the real government data that surfaced this, see the
+        2026-07-18 audit) collided here silently, one always
+        overwriting the other before either reached the database.
 
         Callers should run rows through `filter_rows_by_precedence`
         first — this function has no source-precedence awareness of
@@ -247,7 +267,13 @@ def upsert_price_rows(
 
     deduped: dict[tuple, dict] = {}
     for row in rows:
-        key = (row["mandi_id"], row["crop_id"], row["variety"], row["price_date"])
+        key = (
+            row["mandi_id"],
+            row["crop_id"],
+            row["variety"],
+            row.get("grade") or "",
+            row["price_date"],
+        )
         deduped[key] = row
     unique_rows = list(deduped.values())
 
@@ -258,7 +284,7 @@ def upsert_price_rows(
     for i in range(0, len(unique_rows), batch_size):
         chunk = unique_rows[i : i + batch_size]
         try:
-            table.upsert(chunk, on_conflict="mandi_id,crop_id,variety,price_date").execute()
+            table.upsert(chunk, on_conflict="mandi_id,crop_id,variety,grade,price_date").execute()
             total_upserted += len(chunk)
             continue
         except Exception as exc:
@@ -278,7 +304,7 @@ def upsert_price_rows(
 
         for row in chunk:
             try:
-                table.upsert([row], on_conflict="mandi_id,crop_id,variety,price_date").execute()
+                table.upsert([row], on_conflict="mandi_id,crop_id,variety,grade,price_date").execute()
                 total_upserted += 1
             except Exception as row_exc:
                 if not _is_row_level_error(row_exc):

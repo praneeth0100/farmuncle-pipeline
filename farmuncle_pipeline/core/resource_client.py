@@ -172,10 +172,13 @@ def parse_agmarknet_record(rec: dict) -> dict | None:
         rec: one record dict from a resource's `records` list.
     Outputs:
         A dict with keys commodity/market/state/district/raw_variety/
-        price_date/modal_price/min_price/max_price, or `None` if a
-        required field (commodity, market, state, or a parseable
-        arrival_date) is missing — callers count `None` results as
-        skipped/failed rows.
+        raw_grade/price_date/modal_price/min_price/max_price, or
+        `None` if a required field (commodity, market, state, or a
+        parseable arrival_date) is missing — callers count `None`
+        results as skipped/failed rows. `raw_grade` may be an empty
+        string when the government record didn't report one (not
+        every commodity carries a grade) — this is deliberate, not a
+        parsing failure.
     Failure modes:
         None raised — malformed input produces `None`, not an
         exception, since one bad row in a page of 500 should not abort
@@ -188,6 +191,7 @@ def parse_agmarknet_record(rec: dict) -> dict | None:
     state = (rec_ci.get("state") or "").strip()
     district = (rec_ci.get("district") or "").strip() or None
     raw_variety = (rec_ci.get("variety") or "").strip()
+    raw_grade = (rec_ci.get("grade") or "").strip()
     arrival_date = rec_ci.get("arrival_date")
 
     if not commodity or not market or not state or not arrival_date:
@@ -211,6 +215,7 @@ def parse_agmarknet_record(rec: dict) -> dict | None:
         "state": state,
         "district": district,
         "raw_variety": raw_variety,
+        "raw_grade": raw_grade,
         "price_date": price_date,
         "modal_price": _parse_price(rec_ci.get("modal_price")),
         "min_price": _parse_price(rec_ci.get("min_price")),

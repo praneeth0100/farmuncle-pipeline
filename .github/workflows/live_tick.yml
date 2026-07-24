@@ -20,7 +20,7 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 15 # §24 target is <5 min; generous margin before treating it as hung
+    timeout-minutes: 30 # §24 target is <5 min; generous margin before treating it as hung
     steps:
       - uses: actions/checkout@v4
 

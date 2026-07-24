@@ -348,7 +348,10 @@ def test_upsert_raw_price_entries_batch_passes_resource_batch_id_parser_version_
     upsert_raw_price_entries_batch(
         client,
         resource="resource_2",
-        batch_id="batch-99",
+        # Production raw batches use ULIDs, not numeric database IDs.
+        # This regression test protects the exact schema drift that
+        # previously made the live RPC cast batch IDs to bigint.
+        batch_id="01KY9KRCBCK8S41A06V5MCFHWJ",
         parser_version=5,
         parsed_records=parsed,
     )
@@ -356,7 +359,7 @@ def test_upsert_raw_price_entries_batch_passes_resource_batch_id_parser_version_
     _, params = client.rpc_calls[0]
     for entry in params["p_entries"]:
         assert entry["resource"] == "resource_2"
-        assert entry["batch_id"] == "batch-99"
+        assert entry["batch_id"] == "01KY9KRCBCK8S41A06V5MCFHWJ"
         assert entry["parser_version"] == 5
 
 

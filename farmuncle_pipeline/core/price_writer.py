@@ -154,7 +154,7 @@ def filter_rows_by_precedence(client, rows: list[dict], new_source: Source) -> t
     try:
         response = (
             client.table("mandi_daily_prices")
-            .select("mandi_id,crop_id,variety,grade,price_date,source")
+            .select("mandi_id,crop_id,variety,grade,price_date,source,source_mandi_id")
             .in_("price_date", price_dates)
             .execute()
         )
@@ -172,6 +172,8 @@ def filter_rows_by_precedence(client, rows: list[dict], new_source: Source) -> t
             existing["variety"],
             existing.get("grade") or "",
             existing["price_date"],
+            # 2026-07-25: added — see upsert_price_rows for why.
+            existing.get("source_mandi_id"),
         )
         existing_rank[key] = _SOURCE_RANK.get(existing["source"], 0)
 
@@ -184,6 +186,7 @@ def filter_rows_by_precedence(client, rows: list[dict], new_source: Source) -> t
             row["variety"],
             row.get("grade") or "",
             row["price_date"],
+            row.get("source_mandi_id"),
         )
         if existing_rank.get(key, 0) > new_rank:
             skipped += 1
@@ -273,6 +276,12 @@ def upsert_price_rows(
             row["variety"],
             row.get("grade") or "",
             row["price_date"],
+            # 2026-07-25: added to match uq_prices_business_key_v2. Without
+            # this, two rows from different source markets (same mandi after
+            # a merge, same crop/variety/grade/date) would silently collapse
+            # to one here — before the upsert call even runs — defeating the
+            # reason source_mandi_id was added in the first place.
+            row.get("source_mandi_id"),
         )
         deduped[key] = row
     unique_rows = list(deduped.values())
@@ -284,7 +293,16 @@ def upsert_price_rows(
     for i in range(0, len(unique_rows), batch_size):
         chunk = unique_rows[i : i + batch_size]
         try:
-            table.upsert(chunk, on_conflict="mandi_id,crop_id,variety,grade,price_date").execute()
+            # 2026-07-25: on_conflict target updated to match
+            # uq_prices_business_key_v2 (adds source_mandi_id) — the old
+            # 5-column uq_prices_business_key constraint this pointed to was
+            # dropped the same day, so this MUST include source_mandi_id or
+            # every upsert call fails outright with "no unique or exclusion
+            # constraint matching the ON CONFLICT specification".
+            table.upsert(
+                chunk,
+                on_conflict="mandi_id,crop_id,variety,grade,price_date,source_mandi_id",
+            ).execute()
             total_upserted += len(chunk)
             continue
         except Exception as exc:
@@ -304,7 +322,10 @@ def upsert_price_rows(
 
         for row in chunk:
             try:
-                table.upsert([row], on_conflict="mandi_id,crop_id,variety,grade,price_date").execute()
+                table.upsert(
+                    [row],
+                    on_conflict="mandi_id,crop_id,variety,grade,price_date,source_mandi_id",
+                ).execute()
                 total_upserted += 1
             except Exception as row_exc:
                 if not _is_row_level_error(row_exc):

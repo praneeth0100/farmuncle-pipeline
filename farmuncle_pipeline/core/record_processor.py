@@ -142,6 +142,20 @@ def process_records(
                 "max_price": parsed["max_price"],
                 "unit": unit,
                 "source": source.value,
+                # 2026-07-25 fix: these were never being written at all (confirmed
+                # via full-codebase grep — zero prior references). source_mandi_id
+                # is the resolved mandi id at write time; source_mandi_name is the
+                # literal raw market string as reported by the government record
+                # for THIS row, independent of whatever mandi it resolved to.
+                # KNOWN LIMITATION: once two mandis are merged (union_merge_mandi),
+                # future records under either original raw name will both resolve
+                # to the survivor's mandi.id here, so source_mandi_id alone will
+                # not keep re-distinguishing them going forward — only
+                # source_mandi_name (the raw string) will. A fully durable fix
+                # needs a raw-source identity independent of the canonical
+                # mandi_id, which the schema doesn't have yet.
+                "source_mandi_id": mandi.id,
+                "source_mandi_name": parsed["market"],
                 "batch_id": batch_id,
                 "raw_api_batch_id": raw_api_batch_id,
                 "parser_version": PARSER_VERSION,

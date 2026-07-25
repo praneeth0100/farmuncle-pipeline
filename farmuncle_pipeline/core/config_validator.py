@@ -112,12 +112,21 @@ from farmuncle_pipeline.config import AppConfig, ConfigError, NORMALIZATION_VERS
 # =============================================================================
 
 _REQUIRED_TABLES: Final[tuple[str, ...]] = (
+    # raw_api_records intentionally excluded: insert_raw_api_record() is dead
+    # code (see raw_dedup.py's own docstring — those insert calls were removed
+    # from all three real call sites when content-hashed raw_price_entries
+    # replaced it). Requiring a table nothing writes to would make this
+    # validator fail against a correct, tested live schema.
     "raw_api_batches",
-    "raw_api_records",
+    "raw_price_entries",
     "mandis",
     "crops",
     "mandi_aliases",
     "crop_aliases",
+    "varieties",
+    "variety_aliases",
+    "grades",
+    "district_aliases",
     "entity_history",
     "audit_events",
     "system_config",
@@ -125,22 +134,41 @@ _REQUIRED_TABLES: Final[tuple[str, ...]] = (
     "failed_pages",
     "api_call_logs",
     "mandi_daily_prices",
+    "price_cache",
+    "mandi_duplicate_review_queue",
+    "crop_duplicate_review_queue",
+    "suspicious_price_review",
     "compression_runs",
     "historical_jobs",
     "coverage_reports",
     "quality_alerts",
+    "data_quality_issues",
 )
 
 # RPC name -> the exact set of named parameters `pg_get_function_identity_
-# arguments` reports live, verified directly against wqccgjmvslevkglfkmtc
-# for every entry below. A live signature that has extra, missing, or
-# renamed parameters relative to this set is exactly the "RPC version
-# mismatch" §17 asks startup validation to catch.
+# arguments` reports live, verified directly against flxjrcbhmcuaynctokpv
+# (the project actually live as of 2026-07-25) for every entry below. A live
+# signature that has extra, missing, or renamed parameters relative to this
+# set is exactly the "RPC version mismatch" §17 asks startup validation to
+# catch.
+#
+# NOTE: this replaces an earlier version of this list (normalize_market_name,
+# normalize_crop_name, normalize_variety) that was verified against a
+# DIFFERENT, now-permanently-abandoned project (wqccgjmvslevkglfkmtc, see the
+# module docstring's "Known deviations" section above -- that section is now
+# itself historical, describing a schema generation that no longer exists).
+# The live schema uses find_or_create_* + explicit review_status/merge_method/
+# merge_confidence tracking on mandis/crops instead -- a later, more developed
+# design, not a regression. Updated 2026-07-25 to match what's actually live
+# and tested, not what an earlier session's session verified against a
+# database that no longer exists.
 _REQUIRED_RPCS: Final[Mapping[str, frozenset[str]]] = {
     "find_or_create_mandi": frozenset(
         {"p_name", "p_state", "p_district", "p_lat", "p_lng", "p_source"}
     ),
     "find_or_create_crop": frozenset({"p_name", "p_unit", "p_source"}),
+    "find_or_create_variety": frozenset({"p_crop_id", "p_raw_text"}),
+    "find_or_create_grade": frozenset({"p_variety_id", "p_raw_text"}),
     "merge_entity": frozenset(
         {
             "p_entity_type",
@@ -149,13 +177,23 @@ _REQUIRED_RPCS: Final[Mapping[str, frozenset[str]]] = {
             "p_reason",
             "p_merge_method",
             "p_merge_confidence",
-            "p_created_by",
         }
     ),
-    "normalize_market_name": frozenset({"p_name"}),
-    "normalize_crop_name": frozenset({"p_name"}),
+    "union_merge_mandi": frozenset({"p_survivor_id", "p_loser_id", "p_reason"}),
+    "verify_merge_integrity": frozenset(),
+    "sweep_duplicate_mandis": frozenset(),
+    "sweep_duplicate_crops": frozenset(),
     "normalize_unit": frozenset({"p_unit"}),
-    "normalize_variety": frozenset({"p_variety"}),
+    "normalize_district": frozenset({"p_state", "p_district"}),
+    "refresh_price_cache": frozenset(),
+    "upsert_raw_price_entry": frozenset(
+        {
+            "p_resource", "p_market", "p_state", "p_district", "p_commodity",
+            "p_raw_variety", "p_raw_grade", "p_price_date", "p_content_hash",
+            "p_payload", "p_batch_id", "p_parser_version",
+        }
+    ),
+    "upsert_raw_price_entries_batch": frozenset({"p_entries"}),
     # Zero-argument helper/identity RPCs — still required to exist.
     "current_normalization_version": frozenset(),
     "rpc_version_identity": frozenset(),

@@ -65,12 +65,15 @@ def _price_row(mandi_id=1, crop_id=1, variety="FAQ", grade=None, price_date="202
 class _RealUpsertSemanticsTable:
     """Purpose: unlike test_price_writer.py's `_FakePriceTable` (which
     just appends every attempted row), this fake actually enforces
-    `on_conflict=(mandi_id,crop_id,variety,grade,price_date)` upsert
-    semantics — a dict keyed by that business key, so a second upsert
-    of the same key overwrites in place. This is the one property
+    `on_conflict=(mandi_id,crop_id,variety,grade,price_date,source_mandi_id)`
+    upsert semantics — a dict keyed by that business key, so a second
+    upsert of the same key overwrites in place. This is the one property
     replay/idempotency tests need that the existing price_writer fake
     was never built to check. `grade` added 2026-07-21/22 alongside
-    the price_writer.py business-key fix."""
+    the price_writer.py business-key fix. `source_mandi_id` added
+    2026-07-25 alongside uq_prices_business_key_v2 (see price_writer.py's
+    upsert_price_rows) — the schema this project actually runs against
+    now enforces a 6-column key, not 5."""
 
     def __init__(self):
         self.store: dict[tuple, dict] = {}
@@ -80,13 +83,20 @@ class _RealUpsertSemanticsTable:
         return self
 
     def upsert(self, rows, on_conflict=None):
-        assert on_conflict == "mandi_id,crop_id,variety,grade,price_date"
+        assert on_conflict == "mandi_id,crop_id,variety,grade,price_date,source_mandi_id"
         self._pending = rows
         return self
 
     def execute(self):
         for row in self._pending:
-            key = (row["mandi_id"], row["crop_id"], row["variety"], row.get("grade") or "", row["price_date"])
+            key = (
+                row["mandi_id"],
+                row["crop_id"],
+                row["variety"],
+                row.get("grade") or "",
+                row["price_date"],
+                row.get("source_mandi_id"),
+            )
             self.store[key] = row
         return FakeResponse(data=self._pending)
 
@@ -115,7 +125,7 @@ def test_replay_with_a_revised_value_overwrites_not_appends():
     upsert_price_rows(client, [revised], batch_size=1000)
 
     assert len(client.store) == 1
-    key = (1, 1, "FAQ", "", "2026-07-15")
+    key = (1, 1, "FAQ", "", "2026-07-15", None)
     assert client.store[key]["modal_price"] == 2650
 
 

@@ -1,0 +1,45 @@
+name: sync_storefront
+
+# Mirrors crops/mandis/varieties/grades/price_cache into the separate
+# storefront Supabase project the app reads from. Triggered after any
+# workflow that can change price/dimension data:
+#   - live_tick: Resource 1, every 3h
+#   - daily_rewrite: Resource 2, daily
+#   - retry_failed_pages: recovers rows that failed on first ingestion
+# geocode_mandis / geocode_kerala_villages / historical_backfill are
+# manual-only jobs — run this workflow manually (workflow_dispatch)
+# after those instead of auto-chaining to them.
+on:
+  workflow_run:
+    workflows: ["live_tick", "daily_rewrite", "retry_failed_pages"]
+    types:
+      - completed
+  workflow_dispatch: {}
+
+concurrency:
+  group: sync-storefront
+  cancel-in-progress: false
+
+jobs:
+  run:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      - name: Run sync_storefront
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          STOREFRONT_SUPABASE_URL: ${{ secrets.STOREFRONT_SUPABASE_URL }}
+          STOREFRONT_SUPABASE_SERVICE_KEY: ${{ secrets.STOREFRONT_SUPABASE_SERVICE_KEY }}
+        run: python -m farmuncle_pipeline.scripts.sync_storefront

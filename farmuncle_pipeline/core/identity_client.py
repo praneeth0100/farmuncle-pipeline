@@ -218,6 +218,24 @@ class IdentityClient:
         self._mandi_alias: dict[str, int] = {}
         self._crop_exact: dict[str, int] = {}
         self._crop_alias: dict[str, int] = {}
+        # 2026-07-26: variety/grade preload snapshot, same shape as the
+        # mandi/crop exact-match dicts above. No alias-table equivalent
+        # exists for variety/grade (unlike mandi_aliases/crop_aliases), so
+        # there's only an "exact" dict per entity, not an "exact + alias"
+        # pair. Keyed the same way resolve_variety_id/resolve_grade_id's
+        # own run-cache is keyed: (crop_id, normalized_name) for variety,
+        # (variety_id, normalized_name) for grade — see this module's
+        # "Preload snapshot" section and resolve_variety_id/resolve_grade_id
+        # docstrings for why no separate normalization mirror is needed
+        # here the way `_normalize_market_name`/`_normalize_crop_name` are
+        # needed for mandi/crop: the caller already passes
+        # resolve_variety_id/resolve_grade_id an already-normalized string,
+        # so the snapshot key can be that string directly. Worst case on a
+        # normalization mismatch is a preload miss (falls through to the
+        # RPC, exactly as before this fix) — never a wrong id, since the
+        # dict is built from the live `normalized_name` columns themselves.
+        self._variety_exact: dict[tuple[int, str], int] = {}
+        self._grade_exact: dict[tuple[int, str], int] = {}
 
         # Hit/miss counters (2026-07-15, Fix #1 follow-up — see `stats()`
         # docstring). Deliberately three buckets per entity type, not one
@@ -235,6 +253,17 @@ class IdentityClient:
         self._crop_cache_hits = 0
         self._crop_preload_hits = 0
         self._crop_rpc_calls = 0
+        # 2026-07-26: variety/grade counters, same three-bucket shape as
+        # mandi/crop above — added alongside the preload fix itself so
+        # there's no repeat of the "shipped preload, no way to measure
+        # whether it actually worked" gap the mandi/crop side had until
+        # the 2026-07-15 follow-up.
+        self._variety_cache_hits = 0
+        self._variety_preload_hits = 0
+        self._variety_rpc_calls = 0
+        self._grade_cache_hits = 0
+        self._grade_preload_hits = 0
+        self._grade_rpc_calls = 0
 
     def stats(self) -> dict[str, int]:
         """
@@ -257,9 +286,16 @@ class IdentityClient:
         Outputs:
             A dict with six keys: `mandi_cache_hits`, `mandi_preload_hits`,
             `mandi_rpc_calls`, `crop_cache_hits`, `crop_preload_hits`,
-            `crop_rpc_calls`. Safe to call at any point in a run (e.g.
-            mid-run for a progress check, or after for a final report);
-            counters only ever increase.
+        Outputs:
+            A dict with twelve keys: the original six
+            (`mandi_cache_hits`/`mandi_preload_hits`/`mandi_rpc_calls`,
+            same for `crop_`), plus the identical three-bucket shape for
+            `variety_` and `grade_` (added 2026-07-26 alongside the
+            variety/grade preload fix, for the same diagnostic reason —
+            see this module's variety/grade preload snapshot comment).
+            Safe to call at any point in a run (e.g. mid-run for a
+            progress check, or after for a final report); counters only
+            ever increase.
         Failure modes:
             None raised.
         """
@@ -270,6 +306,12 @@ class IdentityClient:
             "crop_cache_hits": self._crop_cache_hits,
             "crop_preload_hits": self._crop_preload_hits,
             "crop_rpc_calls": self._crop_rpc_calls,
+            "variety_cache_hits": self._variety_cache_hits,
+            "variety_preload_hits": self._variety_preload_hits,
+            "variety_rpc_calls": self._variety_rpc_calls,
+            "grade_cache_hits": self._grade_cache_hits,
+            "grade_preload_hits": self._grade_preload_hits,
+            "grade_rpc_calls": self._grade_rpc_calls,
         }
 
     # Supabase/PostgREST caps unranged selects at a default row limit
@@ -361,6 +403,16 @@ class IdentityClient:
             crop_alias_rows = self._fetch_all_rows(
                 "crop_aliases", "crop_id,normalized_alias"
             )
+            # 2026-07-26: variety/grade preload fix — see this module's
+            # "Preload snapshot" section for why. Both tables use
+            # `_fetch_all_rows` for the same reason mandis/crops do (the
+            # _PAGE_SIZE comment above): grades alone was already 2,286
+            # rows as of this fix, past the default PostgREST cap, so a
+            # plain `.select().execute()` here would have silently
+            # repeated the exact ~40%-hit-rate bug the mandi side had
+            # before that was diagnosed.
+            variety_rows = self._fetch_all_rows("varieties", "id,crop_id,normalized_name")
+            grade_rows = self._fetch_all_rows("grades", "id,variety_id,normalized_name")
         except Exception as exc:
             raise ConfigError(f"IdentityClient.preload failed: {exc}") from exc
 
@@ -374,6 +426,12 @@ class IdentityClient:
         self._crop_exact = {row["normalized_name"]: row["id"] for row in crop_rows}
         self._crop_alias = {
             row["normalized_alias"]: row["crop_id"] for row in crop_alias_rows
+        }
+        self._variety_exact = {
+            (row["crop_id"], row["normalized_name"]): row["id"] for row in variety_rows
+        }
+        self._grade_exact = {
+            (row["variety_id"], row["normalized_name"]): row["id"] for row in grade_rows
         }
         self._preloaded = True
 
@@ -576,6 +634,16 @@ class IdentityClient:
             under Mango). Added 2026-07-26 to give `mandi_daily_prices`
             a real, precise FK identity for variety instead of only the
             free-text column `resolve_variety` populates.
+
+            UPDATE 2026-07-26 (same day, performance fix): now checks
+            the preload snapshot before the RPC, same three-step order
+            as `resolve_mandi`/`resolve_crop` — this was the actual
+            reason historical_backfill got slower after the first
+            version of this method shipped (see this module's variety/
+            grade preload snapshot comment): `IdentityClient` is
+            recreated fresh per date in that script, so every unique
+            variety/grade combo was re-hitting the RPC on every single
+            date instead of amortizing across the whole backfill run.
         Inputs:
             crop_id: the row's already-resolved crop id (`resolve_crop`
                 must run first).
@@ -589,7 +657,10 @@ class IdentityClient:
                 sometimes-an-id depending on whether the source text
                 was blank — one consistent shape for every row, and it
                 matches how the `variety` text column and this id will
-                always agree on which row they're describing.
+                always agree on which row they're describing. It's also
+                exactly why the preload snapshot lookup below needs no
+                separate normalization step — see `__init__`'s
+                `_variety_exact` comment.
         Outputs:
             The resolved variety id. Only `None` if the RPC itself
             somehow receives a blank string (shouldn't happen given the
@@ -600,7 +671,15 @@ class IdentityClient:
         """
         cache_key = (crop_id, variety)
         if cache_key in self._variety_id_cache:
+            self._variety_cache_hits += 1
             return self._variety_id_cache[cache_key]
+
+        if self._preloaded:
+            preload_id = self._variety_exact.get((crop_id, variety))
+            if preload_id is not None:
+                self._variety_id_cache[cache_key] = preload_id
+                self._variety_preload_hits += 1
+                return preload_id
 
         try:
             result = self._client.rpc(
@@ -614,6 +693,7 @@ class IdentityClient:
 
         variety_id = result.data
         self._variety_id_cache[cache_key] = variety_id
+        self._variety_rpc_calls += 1
         return variety_id
 
     def resolve_grade_id(self, *, variety_id: int, grade: str) -> int:
@@ -623,8 +703,9 @@ class IdentityClient:
             `find_or_create_grade` RPC, scoped to `variety_id` (grades
             are per-variety in this schema). Added 2026-07-26 alongside
             `resolve_variety_id` above — see that method's docstring
-            for the "pass the normalized value" reasoning, which
-            applies identically here.
+            for the "pass the normalized value" reasoning and the same-
+            day preload-snapshot performance fix, both of which apply
+            identically here.
         Inputs:
             variety_id: the row's resolved variety id, from
                 `resolve_variety_id` above (must run first — always
@@ -640,7 +721,15 @@ class IdentityClient:
         """
         cache_key = (variety_id, grade)
         if cache_key in self._grade_id_cache:
+            self._grade_cache_hits += 1
             return self._grade_id_cache[cache_key]
+
+        if self._preloaded:
+            preload_id = self._grade_exact.get((variety_id, grade))
+            if preload_id is not None:
+                self._grade_id_cache[cache_key] = preload_id
+                self._grade_preload_hits += 1
+                return preload_id
 
         try:
             result = self._client.rpc(
@@ -654,6 +743,7 @@ class IdentityClient:
 
         grade_id = result.data
         self._grade_id_cache[cache_key] = grade_id
+        self._grade_rpc_calls += 1
         return grade_id
 
     def resolve_unit(self, raw_unit: str) -> str:

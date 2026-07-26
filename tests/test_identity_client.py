@@ -441,3 +441,48 @@ def test_resolve_unit_calls_rpc_once_per_distinct_raw_unit():
     assert first == second == "kg"
     assert len(client.rpc_calls) == 1
     assert client.rpc_calls[0] == ("normalize_unit", {"p_unit": "kg"})
+
+
+# =============================================================================
+# resolve_variety_id / resolve_grade_id — RPC-backed, memoized
+# Added 2026-07-26 alongside the FK-id wiring (see identity_client.py).
+# =============================================================================
+
+def test_resolve_variety_id_calls_rpc_once_per_distinct_crop_and_variety():
+    client = FakeIdentityDBClient(rpc_responses={"find_or_create_variety": 77})
+    identity = IdentityClient(client)
+
+    first = identity.resolve_variety_id(crop_id=10, variety="faq")
+    second = identity.resolve_variety_id(crop_id=10, variety="faq")
+
+    assert first == second == 77
+    assert len(client.rpc_calls) == 1
+    assert client.rpc_calls[0] == ("find_or_create_variety", {"p_crop_id": 10, "p_raw_text": "faq"})
+
+
+def test_resolve_variety_id_same_variety_different_crop_calls_rpc_again():
+    # Varieties are crop-scoped — "other" under Tomato and "other" under
+    # Onion are different rows server-side, so the cache key must include
+    # crop_id, not just the variety string.
+    responses = {"find_or_create_variety": lambda params: 100 + params["p_crop_id"]}
+    client = FakeIdentityDBClient(rpc_responses=responses)
+    identity = IdentityClient(client)
+
+    tomato_id = identity.resolve_variety_id(crop_id=10, variety="other")
+    onion_id = identity.resolve_variety_id(crop_id=20, variety="other")
+
+    assert tomato_id == 110
+    assert onion_id == 120
+    assert len(client.rpc_calls) == 2
+
+
+def test_resolve_grade_id_calls_rpc_once_per_distinct_variety_and_grade():
+    client = FakeIdentityDBClient(rpc_responses={"find_or_create_grade": 55})
+    identity = IdentityClient(client)
+
+    first = identity.resolve_grade_id(variety_id=77, grade="non-faq")
+    second = identity.resolve_grade_id(variety_id=77, grade="non-faq")
+
+    assert first == second == 55
+    assert len(client.rpc_calls) == 1
+    assert client.rpc_calls[0] == ("find_or_create_grade", {"p_variety_id": 77, "p_raw_text": "non-faq"})

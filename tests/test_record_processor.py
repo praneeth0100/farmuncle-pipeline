@@ -90,10 +90,16 @@ _KNOWN_CROP = {"id": 10, "normalized_name": "tomato"}
 
 
 def _make_identity(*, mandis=None, crops=None, rpc_responses=None) -> IdentityClient:
+    # 2026-07-26: find_or_create_variety/find_or_create_grade defaults added
+    # so every existing test keeps getting real (non-None) variety_id/
+    # grade_id values without having to touch each call site — callers that
+    # care about a specific id still override via rpc_responses.
+    responses = {"find_or_create_variety": 201, "find_or_create_grade": 301}
+    responses.update(rpc_responses or {})
     client = FakeIdentityDBClient(
         mandis=mandis or [],
         crops=crops or [],
-        rpc_responses=rpc_responses or {},
+        rpc_responses=responses,
     )
     identity = IdentityClient(client)
     identity.preload()
@@ -123,6 +129,12 @@ def test_process_records_well_formed_record_produces_expected_row(record):
     assert row["crop_id"] == 10
     assert row["variety"] == "faq"
     assert row["grade"] == "non-faq"
+    # 2026-07-26: FK-id counterparts (see identity_client.py's
+    # resolve_variety_id/resolve_grade_id) — non-None for any row that
+    # reaches this point, since both text values are always non-blank
+    # (real or the "other" fallback) by the time these are called.
+    assert row["variety_id"] == 201
+    assert row["grade_id"] == 301
     assert row["price_date"] == "2026-07-15"
 
     # Price fields parsed to float.

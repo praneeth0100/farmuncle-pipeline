@@ -7,15 +7,18 @@ Purpose (module-level):
     The "turn a list of raw government-API records into
     `mandi_daily_prices`-ready row dicts" step: parse each record
     (`resource_client.parse_agmarknet_record`), resolve its mandi/crop/
-    variety through the RPC-backed `IdentityClient` (invariant 3 — no
-    identity logic duplicated in Python), score its quality
+    variety/grade through the RPC-backed `IdentityClient` (invariant 3
+    — no identity logic duplicated in Python), score its quality
     (`quality_scoring.compute_quality`), and assemble the row dict
-    `price_writer.upsert_price_rows` expects — including `grade`,
-    resolved via `identity.resolve_grade` the same way `variety` is
-    (local normalization, not `find_or_create_grade` — see that
-    method's docstring in identity_client.py for why). `grade` may
-    normalize to `"other"` when the government record didn't report
-    one for this row.
+    `price_writer.upsert_price_rows` expects. `variety`/`grade` (text)
+    are local-normalization values from `identity.resolve_variety`/
+    `resolve_grade` — either may normalize to `"other"` when the
+    government record didn't report one for this row. `variety_id`/
+    `grade_id` (added 2026-07-26) are their FK counterparts, resolved
+    via `identity.resolve_variety_id`/`resolve_grade_id` from those
+    same normalized text values — see those methods' docstrings in
+    identity_client.py for why the normalized (not raw) value is what
+    gets passed through.
 
     This exact sequence appeared inline, identically, in both
     `live_tick.py` (Step 14, Resource 1) and `resource2_pipeline.py`
@@ -115,6 +118,13 @@ def process_records(
             crop = identity.resolve_crop(name=parsed["commodity"], unit=unit, source=source)
             variety = identity.resolve_variety(parsed["raw_variety"])
             grade = identity.resolve_grade(parsed["raw_grade"])
+            # 2026-07-26: FK-id counterparts to the text variety/grade above
+            # (see identity_client.py's resolve_variety_id/resolve_grade_id
+            # docstrings) — same try/except as everything else in this block
+            # since these are real RPC calls that can fail like any other
+            # identity resolution here.
+            variety_id = identity.resolve_variety_id(crop_id=crop.id, variety=variety)
+            grade_id = identity.resolve_grade_id(variety_id=variety_id, grade=grade)
         except ConfigError as exc:
             print(f"[{job_name}] identity resolution failed, skipping row: {exc}")
             rows_failed += 1
@@ -136,6 +146,8 @@ def process_records(
                 "crop_id": crop.id,
                 "variety": variety,
                 "grade": grade,
+                "variety_id": variety_id,
+                "grade_id": grade_id,
                 "price_date": parsed["price_date"],
                 "modal_price": parsed["modal_price"],
                 "min_price": parsed["min_price"],

@@ -201,6 +201,13 @@ class IdentityClient:
         self._variety_cache: dict[str, str] = {}
         self._grade_cache: dict[str, str] = {}
         self._unit_cache: dict[str, str] = {}
+        # 2026-07-26: added alongside resolve_variety_id/resolve_grade_id
+        # below — separate caches from _variety_cache/_grade_cache above
+        # since those key on the raw (pre-normalization) string and return
+        # normalized text, while these key on (crop_id, normalized_variety)
+        # / (variety_id, normalized_grade) and return an id.
+        self._variety_id_cache: dict[tuple[int, str], int] = {}
+        self._grade_id_cache: dict[tuple[int, str], int] = {}
 
         # Preload snapshot state — empty/unused until `preload()` is
         # called. `_preloaded` gates whether resolve_mandi/resolve_crop
@@ -532,19 +539,19 @@ class IdentityClient:
             Normalize a grade string, same treatment as
             `resolve_variety` above. `mandi_daily_prices.grade` is a
             plain `NOT NULL` text column, not FK'd to the `grades`
-            table — same shape as `variety`.
+            table — same shape as `variety`. This method is UNCHANGED
+            and still what populates that text column / the business
+            key — it does not call any RPC.
 
-            Design decision made 2026-07-21 (asked, confirmed):
-            deliberately does NOT call `find_or_create_grade`, even
-            though that RPC exists server-side. `find_or_create_grade`
-            requires a `p_variety_id`, which this pipeline has no way
-            to produce — `resolve_variety` above returns a normalized
-            *string*, not an id, because variety was never wired
-            through `find_or_create_variety` either (same reasoning,
-            same precedent, see that method's docstring). Wiring grade
-            through the RPC would require first wiring variety through
-            its RPC, which is a separate, larger design change than
-            this fix and was explicitly deferred, not overlooked.
+            UPDATE 2026-07-26: the 2026-07-21 deferral this docstring
+            used to describe (not wiring grade through
+            `find_or_create_grade` because variety wasn't wired through
+            `find_or_create_variety` either) is resolved — see
+            `resolve_variety_id`/`resolve_grade_id` below, which are
+            the FK-id counterparts to this method and `resolve_variety`
+            above. Call both: the text version for the `variety`/`grade`
+            columns (business key), the id version for the new
+            `variety_id`/`grade_id` FK columns.
         Inputs:
             raw_grade: grade string as reported by the government API
                 (frequently blank — not every commodity carries one).
@@ -559,6 +566,95 @@ class IdentityClient:
         normalized = _normalize_grade(raw_grade)
         self._grade_cache[raw_grade] = normalized
         return normalized
+
+    def resolve_variety_id(self, *, crop_id: int, variety: str) -> int:
+        """
+        Purpose:
+            Resolve (or create) a canonical variety id via the
+            `find_or_create_variety` RPC, scoped to `crop_id`
+            (varieties are per-crop — e.g. "Alphonso" only makes sense
+            under Mango). Added 2026-07-26 to give `mandi_daily_prices`
+            a real, precise FK identity for variety instead of only the
+            free-text column `resolve_variety` populates.
+        Inputs:
+            crop_id: the row's already-resolved crop id (`resolve_crop`
+                must run first).
+            variety: the ALREADY-NORMALIZED variety string, i.e. the
+                return value of `resolve_variety` above (including its
+                blank -> "other" substitution) — NOT the raw government
+                string. Passing the normalized value here deliberately:
+                it means a blank/missing variety resolves to a real,
+                reusable "other" variety per crop (id populated, same
+                as every other row) rather than sometimes-NULL,
+                sometimes-an-id depending on whether the source text
+                was blank — one consistent shape for every row, and it
+                matches how the `variety` text column and this id will
+                always agree on which row they're describing.
+        Outputs:
+            The resolved variety id. Only `None` if the RPC itself
+            somehow receives a blank string (shouldn't happen given the
+            input contract above, but `find_or_create_variety` returns
+            null for that case rather than raising).
+        Failure modes:
+            Raises `ConfigError` if the RPC call itself fails.
+        """
+        cache_key = (crop_id, variety)
+        if cache_key in self._variety_id_cache:
+            return self._variety_id_cache[cache_key]
+
+        try:
+            result = self._client.rpc(
+                "find_or_create_variety",
+                {"p_crop_id": crop_id, "p_raw_text": variety},
+            ).execute()
+        except Exception as exc:
+            raise ConfigError(
+                f"find_or_create_variety failed (crop_id={crop_id}, variety={variety!r}): {exc}"
+            ) from exc
+
+        variety_id = result.data
+        self._variety_id_cache[cache_key] = variety_id
+        return variety_id
+
+    def resolve_grade_id(self, *, variety_id: int, grade: str) -> int:
+        """
+        Purpose:
+            Resolve (or create) a canonical grade id via the
+            `find_or_create_grade` RPC, scoped to `variety_id` (grades
+            are per-variety in this schema). Added 2026-07-26 alongside
+            `resolve_variety_id` above — see that method's docstring
+            for the "pass the normalized value" reasoning, which
+            applies identically here.
+        Inputs:
+            variety_id: the row's resolved variety id, from
+                `resolve_variety_id` above (must run first — always
+                non-null given that method's input contract, so grade
+                resolution is never blocked on a missing variety the
+                way it would be with a raw/possibly-blank variety).
+            grade: the ALREADY-NORMALIZED grade string, i.e. the return
+                value of `resolve_grade` above.
+        Outputs:
+            The resolved grade id.
+        Failure modes:
+            Raises `ConfigError` if the RPC call itself fails.
+        """
+        cache_key = (variety_id, grade)
+        if cache_key in self._grade_id_cache:
+            return self._grade_id_cache[cache_key]
+
+        try:
+            result = self._client.rpc(
+                "find_or_create_grade",
+                {"p_variety_id": variety_id, "p_raw_text": grade},
+            ).execute()
+        except Exception as exc:
+            raise ConfigError(
+                f"find_or_create_grade failed (variety_id={variety_id}, grade={grade!r}): {exc}"
+            ) from exc
+
+        grade_id = result.data
+        self._grade_id_cache[cache_key] = grade_id
+        return grade_id
 
     def resolve_unit(self, raw_unit: str) -> str:
         """

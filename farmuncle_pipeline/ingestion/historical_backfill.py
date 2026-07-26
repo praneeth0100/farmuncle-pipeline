@@ -70,6 +70,7 @@ import argparse
 from datetime import date, datetime, timedelta, timezone
 
 from farmuncle_pipeline.core.batch_lifecycle import JobAlreadyRunningError
+from farmuncle_pipeline.core.price_cache import refresh_price_cache
 from farmuncle_pipeline.ingest_common import IngestionBatchStatus, STATES, validate_startup
 from farmuncle_pipeline.core.resource2_pipeline import ingest_resource2_for_date
 
@@ -192,6 +193,13 @@ def run_historical_backfill(ctx, *, start_date: date, end_date: date) -> None:
         f"[historical_backfill] range {start_date} to {end_date} complete — "
         f"{total} date(s) attempted: {succeeded} SUCCESS, {partial} PARTIAL, {failed} FAILED"
     )
+
+    # §15 Cache Invalidation Policy: refresh price_cache once after the whole
+    # range finishes, not per-date - a backfill can touch hundreds of dates,
+    # and price_cache only ever needs to reflect the LATEST price per
+    # (mandi, crop, variety, grade), so intermediate refreshes would just be
+    # overwritten by later ones. Non-fatal on failure - see price_cache.py.
+    refresh_price_cache(ctx.supabase, caller="historical_backfill")
 
 
 def main() -> None:

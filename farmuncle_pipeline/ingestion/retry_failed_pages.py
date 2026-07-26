@@ -83,6 +83,7 @@ from farmuncle_pipeline.core.batch_lifecycle import (
 )
 from farmuncle_pipeline.core.raw_dedup import upsert_raw_price_entries_batch
 from farmuncle_pipeline.core.identity_client import IdentityClient
+from farmuncle_pipeline.core.price_cache import refresh_price_cache
 from farmuncle_pipeline.ingest_common import (
     ApiCallStatus,
     ConfigError,
@@ -364,6 +365,12 @@ def run_retry_failed_pages(ctx) -> None:
             f"{still_pending} still pending, {skipped} skipped, {rows_processed} row(s) upserted, "
             f"{rows_failed} row(s) skipped (parse/identity)."
         )
+
+        # §15 Cache Invalidation Policy: only refresh if rows actually
+        # changed - a run where every page failed again or was skipped has
+        # nothing new to invalidate. Mirrors live_tick.py's identical gate.
+        if rows_processed > 0:
+            refresh_price_cache(supabase, caller="retry_failed_pages")
 
     except Exception as exc:
         error_summary = str(exc)[:500]

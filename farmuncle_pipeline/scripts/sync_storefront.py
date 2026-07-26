@@ -19,6 +19,11 @@ Purpose:
     parent actually made it into the storefront — otherwise the FK
     constraints on the storefront side reject the insert.
 
+    price_cache carries real variety_id/grade_id foreign keys (not just
+    the denormalized variety/grade text) as of the 2026-07-26 migration
+    on both warehouse and storefront — the app should join on these ids,
+    not string-match variety/grade text against varieties.name/grades.name.
+
 Run order matters (FK dependencies on the storefront side):
     crops -> mandis -> varieties -> grades -> price_cache
 
@@ -122,6 +127,7 @@ def sync_price_cache(
     storefront: Client,
     active_crop_ids: set[int],
     active_mandi_ids: set[int],
+    active_variety_ids: set[int],
 ) -> None:
     # price_cache is a full snapshot table (not append-only), so a full
     # replace is the correct semantics: rows that vanished from the
@@ -129,13 +135,15 @@ def sync_price_cache(
     # must vanish from the storefront too.
     all_rows = fetch_all(
         warehouse, "price_cache",
-        "mandi_id,crop_id,variety,grade,latest_price_date,modal_price,min_price,"
-        "max_price,source_mandi_name,change_1d,change_1d_pct,change_7d,change_7d_pct,"
-        "change_1m,change_1m_pct",
+        "mandi_id,crop_id,variety,grade,variety_id,grade_id,latest_price_date,"
+        "modal_price,min_price,max_price,source_mandi_name,change_1d,change_1d_pct,"
+        "change_7d,change_7d_pct,change_1m,change_1m_pct",
     )
     rows = [
         r for r in all_rows
-        if r["mandi_id"] in active_mandi_ids and r["crop_id"] in active_crop_ids
+        if r["mandi_id"] in active_mandi_ids
+        and r["crop_id"] in active_crop_ids
+        and r["variety_id"] in active_variety_ids
     ]
 
     # Delete-all then insert. mandi_id is always a positive bigint, so
@@ -165,7 +173,7 @@ def main() -> None:
     active_mandi_ids = sync_mandis(warehouse, storefront)
     active_variety_ids = sync_varieties(warehouse, storefront, active_crop_ids)
     sync_grades(warehouse, storefront, active_variety_ids)
-    sync_price_cache(warehouse, storefront, active_crop_ids, active_mandi_ids)
+    sync_price_cache(warehouse, storefront, active_crop_ids, active_mandi_ids, active_variety_ids)
 
     print("Storefront sync complete.")
 

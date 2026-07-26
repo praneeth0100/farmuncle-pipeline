@@ -23,3 +23,6 @@ Thumbs.db
 
 # Logs
 *.log
+# App-repo docs that shouldn't live in the pipeline repo
+FarmUncle_App_Foundation_Architecture_v1.md
+FarmUncle_Home_MandiList_v2_Build_Spec.md

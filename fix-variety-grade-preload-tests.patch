@@ -1,0 +1,61 @@
+diff --git a/tests/test_identity_client.py b/tests/test_identity_client.py
+index 891154a..09a1a2a 100644
+--- a/tests/test_identity_client.py
++++ b/tests/test_identity_client.py
+@@ -152,13 +152,30 @@ class FakeIdentityDBClient:
+         mandi_aliases=None,
+         crops=None,
+         crop_aliases=None,
++        varieties=None,
++        variety_aliases=None,
++        grades=None,
++        grade_aliases=None,
+         rpc_responses=None,
+     ):
++        # 2026-07-27: varieties/grades added — preload() has fetched these
++        # two since 965e89b (variety/grade preload fix), but this fake was
++        # never updated to match, so every test calling preload() has been
++        # failing with a bare KeyError('varieties') since that commit.
++        # variety_aliases/grade_aliases aren't fetched by preload() today
++        # (see IdentityClient's own "Preload snapshot" docstring — variety/
++        # grade preload is exact-match only, no alias layer yet) but are
++        # registered here anyway so a future preload enhancement adding
++        # them doesn't silently repeat this exact failure mode.
+         self._tables = {
+             "mandis": mandis or [],
+             "mandi_aliases": mandi_aliases or [],
+             "crops": crops or [],
+             "crop_aliases": crop_aliases or [],
++            "varieties": varieties or [],
++            "variety_aliases": variety_aliases or [],
++            "grades": grades or [],
++            "grade_aliases": grade_aliases or [],
+         }
+         self._rpc_responses = rpc_responses or {}
+         self.rpc_calls: list[tuple[str, dict]] = []
+@@ -302,7 +319,11 @@ def test_resolve_crop_run_cache_hit_skips_second_rpc_call():
+ # stats() — hit/miss counters (Fix #1 follow-up)
+ # =============================================================================
+ 
+-def test_stats_starts_at_zero_for_all_six_counters():
++def test_stats_starts_at_zero_for_all_twelve_counters():
++    # 2026-07-27: renamed from ..._all_six_counters and the six
++    # variety_*/grade_* keys added below — stats() has returned 12 keys
++    # since 965e89b's variety/grade preload fix, this assertion was never
++    # updated to match.
+     identity = IdentityClient(FakeIdentityDBClient())
+ 
+     assert identity.stats() == {
+@@ -312,6 +333,12 @@ def test_stats_starts_at_zero_for_all_six_counters():
+         "crop_cache_hits": 0,
+         "crop_preload_hits": 0,
+         "crop_rpc_calls": 0,
++        "variety_cache_hits": 0,
++        "variety_preload_hits": 0,
++        "variety_rpc_calls": 0,
++        "grade_cache_hits": 0,
++        "grade_preload_hits": 0,
++        "grade_rpc_calls": 0,
+     }
+ 
+ 

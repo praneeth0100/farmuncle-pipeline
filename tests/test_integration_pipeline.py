@@ -107,7 +107,10 @@ def test_full_pipeline_one_well_formed_record_end_to_end():
     stored = next(iter(table.store.values()))
     assert stored["mandi_id"] == _KNOWN_MANDI["id"]
     assert stored["crop_id"] == _KNOWN_CROP["id"]
-    assert stored["modal_price"] == 2500.0
+    # Converted from Rs/Quintal (raw government scale) to true Rs/kg per
+    # the 2026-08-03 fix — same known crop as test_record_processor.py's
+    # fixture, not in PER_ANIMAL_CROP_IDS, so it gets the /100 conversion.
+    assert stored["modal_price"] == 25.0
 
 
 def test_full_pipeline_malformed_record_never_reaches_price_writer():

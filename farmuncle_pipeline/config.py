@@ -93,6 +93,31 @@ class ConfigError(Exception):
 
 SCHEMA_VERSION: Final[int] = 1          # ingestion_batches.schema_version, raw_api_batches.schema_version
 TAXONOMY_VERSION: Final[int] = 1        # crops.taxonomy_version
+# 2026-08-03 fix: Government Resource 1/2 responses report price per
+# QUINTAL (100kg) for ordinary commodities — confirmed by cross-checking
+# stored modal_price/100 against real market rates (Onion/Tomato/Potato/
+# Ghee/Fish all landed within normal Rs/kg range). The pipeline used to
+# store that raw quintal-scale number under a hardcoded `unit="kg"` label
+# with no conversion — wrong on every row. Fixed here: all ordinary crops
+# get divided by 100 at ingest time and tagged unit="kg" (now actually
+# true). The crop ids below are a real exception discovered by manual
+# price-magnitude review (2026-08-03): live animals sold as a single
+# headcount transaction, not by weight — dividing by 100 would be wrong
+# for these, so they're passed through unscaled and tagged unit="animal".
+# This list has NO automatic source — it mirrors crops.display_unit=
+# 'Animal' in Supabase and must be kept in sync by hand if that ever
+# changes (e.g. a newly-added livestock commodity found later).
+PER_ANIMAL_CROP_IDS: Final[frozenset[int]] = frozenset({
+    234,  # Cow
+    274,  # Calf
+    214,  # Ox
+    273,  # Bull
+    211,  # She Buffalo
+    257,  # Goat
+    210,  # Sheep
+    260,  # Pigs
+})
+
 NORMALIZATION_VERSION: Final[int] = 1   # mandi_aliases/crop_aliases/mandi_daily_prices.normalization_version
 RPC_VERSION: Final[int] = 1             # entity_history.rpc_version
 PARSER_VERSION: Final[int] = 1          # raw_api_records.parser_version, mandi_daily_prices.parser_version

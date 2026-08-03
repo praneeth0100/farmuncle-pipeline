@@ -137,10 +137,13 @@ def test_process_records_well_formed_record_produces_expected_row(record):
     assert row["grade_id"] == 301
     assert row["price_date"] == "2026-07-15"
 
-    # Price fields parsed to float.
-    assert row["modal_price"] == 2500.0
-    assert row["min_price"] == 2000.0
-    assert row["max_price"] == 3000.0
+    # Price fields parsed to float, then converted from Rs/Quintal (raw
+    # government scale) to true Rs/kg per the 2026-08-03 fix — crop id 10
+    # (Tomato) is an ordinary commodity, not in PER_ANIMAL_CROP_IDS, so it
+    # gets the /100 conversion.
+    assert row["modal_price"] == 25.0
+    assert row["min_price"] == 20.0
+    assert row["max_price"] == 30.0
 
     # Passed-through fields.
     assert row["unit"] == "kg"
@@ -159,6 +162,40 @@ def test_process_records_well_formed_record_produces_expected_row(record):
     assert row["quality_components"]["entity_verified"] == 1.0
     assert row["quality_components"]["price_sanity"] == 1.0
     assert 0.0 <= row["quality_score"] <= 1.0
+
+
+def test_process_records_animal_crop_price_not_divided():
+    # 2026-08-03: PER_ANIMAL_CROP_IDS crops (real livestock, sold as a
+    # single per-head transaction) must NOT get the /100 quintal->kg
+    # conversion applied to ordinary commodities — nothing else in this
+    # file exercises that branch, since _KNOWN_CROP (Tomato, id 10) isn't
+    # in the exception list.
+    known_cow = {"id": 234, "normalized_name": "cow"}
+    # commodity must match the preloaded crop's normalized_name, or
+    # identity resolution falls through to find_or_create_crop (which
+    # this fake client leaves unconfigured, returning crop_id None) —
+    # _RESOURCE_1_RECORD's "Tomato" wouldn't resolve against "cow".
+    cow_record = {**_RESOURCE_1_RECORD, "commodity": "Cow"}
+    identity = _make_identity(mandis=[_KNOWN_MANDI], crops=[known_cow])
+
+    result = process_records(
+        [cow_record],
+        identity=identity,
+        unit="kg",
+        source=Source.RESOURCE_1,
+        batch_id="batch-animal-1",
+        raw_api_batch_id="raw-animal-1",
+        job_name="test_job",
+    )
+
+    assert result.rows_failed == 0
+    row = result.price_rows[0]
+    assert row["crop_id"] == 234
+    # Unscaled — same raw values as the source record, not divided by 100.
+    assert row["modal_price"] == 2500.0
+    assert row["min_price"] == 2000.0
+    assert row["max_price"] == 3000.0
+    assert row["unit"] == "animal"
 
 
 def test_process_records_malformed_record_is_skipped_not_raised():

@@ -42,7 +42,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from farmuncle_pipeline.config import ConfigError, NORMALIZATION_VERSION, PARSER_VERSION, Source
+from farmuncle_pipeline.config import ConfigError, NORMALIZATION_VERSION, PARSER_VERSION, PER_ANIMAL_CROP_IDS, Source
 from farmuncle_pipeline.core.identity_client import IdentityClient
 from farmuncle_pipeline.core.quality_scoring import compute_quality
 from farmuncle_pipeline.core.resource_client import parse_agmarknet_record
@@ -85,7 +85,11 @@ def process_records(
         unit: already-normalized unit string (see
             `IdentityClient.resolve_unit`) — neither resource carries a
             per-row unit field, so callers pass one fixed, normalized
-            default.
+            default. Used only for `resolve_crop`'s first-creation
+            bookkeeping (`crops.unit` when a brand-new crop is inserted);
+            the actual per-row `unit` stored on `mandi_daily_prices` is
+            computed independently below, per-crop, since 2026-08-03
+            (see `PER_ANIMAL_CROP_IDS` in config.py).
         source: `Source.RESOURCE_1` or `Source.RESOURCE_2` — tags every
             resulting row and is passed to `compute_quality` for its
             `source_confidence` component.
@@ -130,11 +134,29 @@ def process_records(
             rows_failed += 1
             continue
 
+        # 2026-08-03 fix: government price is Rs/Quintal for everything
+        # except real livestock (per-animal transactions) — see
+        # PER_ANIMAL_CROP_IDS docstring in config.py. Convert to true
+        # Rs/kg here, per-row, now that we know which crop this is;
+        # the `unit` param passed into this function is only used above
+        # for resolve_crop's first-creation bookkeeping, not for what
+        # gets stored on the row.
+        is_animal = crop.id in PER_ANIMAL_CROP_IDS
+        row_unit = "animal" if is_animal else "kg"
+        if is_animal:
+            row_modal_price = parsed["modal_price"]
+            row_min_price = parsed["min_price"]
+            row_max_price = parsed["max_price"]
+        else:
+            row_modal_price = parsed["modal_price"] / 100 if parsed["modal_price"] is not None else None
+            row_min_price = parsed["min_price"] / 100 if parsed["min_price"] is not None else None
+            row_max_price = parsed["max_price"] / 100 if parsed["max_price"] is not None else None
+
         quality = compute_quality(
             source=source,
-            modal_price=parsed["modal_price"],
-            min_price=parsed["min_price"],
-            max_price=parsed["max_price"],
+            modal_price=row_modal_price,
+            min_price=row_min_price,
+            max_price=row_max_price,
             variety=variety,
             mandi_newly_created=mandi.first_seen_this_run,
             crop_newly_created=crop.first_seen_this_run,
@@ -149,10 +171,10 @@ def process_records(
                 "variety_id": variety_id,
                 "grade_id": grade_id,
                 "price_date": parsed["price_date"],
-                "modal_price": parsed["modal_price"],
-                "min_price": parsed["min_price"],
-                "max_price": parsed["max_price"],
-                "unit": unit,
+                "modal_price": row_modal_price,
+                "min_price": row_min_price,
+                "max_price": row_max_price,
+                "unit": row_unit,
                 "source": source.value,
                 # 2026-07-25 fix: these were never being written at all (confirmed
                 # via full-codebase grep — zero prior references). source_mandi_id

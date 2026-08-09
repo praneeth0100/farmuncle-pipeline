@@ -89,11 +89,17 @@ def cached_search(provider_name, provider_obj, query, is_places: bool):
     hit = cache.get(provider_name, query)
     if hit is not None:
         return [dict_to_candidate(d) for d in hit], {"status": "CACHE_HIT"}
-    if is_places:
-        candidates, diag = provider_obj.search(query)
-    else:
-        candidates, diag = provider_obj.search(query)
-    cache.set(provider_name, query, [candidate_to_dict(c) for c in candidates])
+    candidates, diag = provider_obj.search(query)
+    # Only cache a genuine terminal answer. A failed call (auth error,
+    # rate limit, exception, malformed request) must NEVER be cached as
+    # if it were a real "no results" -- that permanently poisons every
+    # future run for this exact query string, even after whatever broke
+    # the call gets fixed. Concretely: this bit us for real on
+    # 2026-08-09 -- a 403 from a not-yet-fully-enabled API got cached as
+    # "[]", and the next run silently replayed that cached emptiness
+    # instead of ever calling Google again.
+    if diag.get("status") in ("OK", "ZERO_RESULTS"):
+        cache.set(provider_name, query, [candidate_to_dict(c) for c in candidates])
     return candidates, diag
 
 

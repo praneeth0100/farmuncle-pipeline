@@ -197,6 +197,16 @@ _REQUIRED_RPCS: Final[Mapping[str, frozenset[str]]] = {
         }
     ),
     "union_merge_mandi": frozenset({"p_survivor_id", "p_loser_id", "p_reason"}),
+    # 2026-08-05 addition: created by migration
+    # 20260805000000_add_update_mandi_location_rpc.sql -- this RPC was
+    # called by geocode_mandis.py/geocode_kerala_villages.py since
+    # 2026-07-16 but never actually existed in the database (0/2767
+    # mandis had ever been geocoded as a result). Registering it here now
+    # so startup validation would actually catch this class of bug going
+    # forward instead of silently letting every geocoding write fail.
+    "update_mandi_location": frozenset(
+        {"p_mandi_id", "p_latitude", "p_longitude", "p_location_confidence", "p_source"}
+    ),
     "verify_merge_integrity": frozenset(),
     "sweep_duplicate_mandis": frozenset(),
     "sweep_duplicate_crops": frozenset(),

@@ -1,0 +1,41 @@
+diff --git a/farmuncle_pipeline/core/config_validator.py b/farmuncle_pipeline/core/config_validator.py
+index dbc3f2e..0134bea 100644
+--- a/farmuncle_pipeline/core/config_validator.py
++++ b/farmuncle_pipeline/core/config_validator.py
+@@ -143,6 +143,23 @@ _REQUIRED_TABLES: Final[tuple[str, ...]] = (
+     "coverage_reports",
+     "quality_alerts",
+     "data_quality_issues",
++    # 2026-07-27 additions — variety/grade dedup infra built to match the
++    # existing mandi/crop pattern (grade_aliases didn't exist at all before
++    # this; variety_duplicate_review_queue/grade_duplicate_review_queue are
++    # the queue-table half of sweep_duplicate_varieties/grades below).
++    "grade_aliases",
++    "variety_duplicate_review_queue",
++    "grade_duplicate_review_queue",
++    # 2026-07-27 additions — the 7 views nightly_quality_audit.py depends on.
++    # PostgREST exposes views identically to tables in its OpenAPI document,
++    # so a plain table-existence check covers them correctly.
++    "v_audit_ghost_mandis",
++    "v_audit_ghost_crops",
++    "v_audit_duplicate_price_keys",
++    "v_audit_business_key_constraint",
++    "v_audit_coordinate_mismatch",
++    "v_audit_price_date_bounds",
++    "v_audit_present_price_dates",
+ )
+ 
+ # RPC name -> the exact set of named parameters `pg_get_function_identity_
+@@ -183,6 +200,12 @@ _REQUIRED_RPCS: Final[Mapping[str, frozenset[str]]] = {
+     "verify_merge_integrity": frozenset(),
+     "sweep_duplicate_mandis": frozenset(),
+     "sweep_duplicate_crops": frozenset(),
++    # 2026-07-27 additions — variety/grade dedup sweeps built to mirror
++    # sweep_duplicate_mandis/crops, and get_ops_dashboard (previously did
++    # not exist at all), all zero-argument like their siblings above.
++    "sweep_duplicate_varieties": frozenset(),
++    "sweep_duplicate_grades": frozenset(),
++    "get_ops_dashboard": frozenset(),
+     "normalize_unit": frozenset({"p_unit"}),
+     "normalize_district": frozenset({"p_state", "p_district"}),
+     "refresh_price_cache": frozenset(),

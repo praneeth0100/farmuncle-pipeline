@@ -1,0 +1,19 @@
+--- a/tests/test_record_processor.py
++++ b/tests/test_record_processor.py
+@@ -171,10 +171,15 @@
+     # file exercises that branch, since _KNOWN_CROP (Tomato, id 10) isn't
+     # in the exception list.
+     known_cow = {"id": 234, "normalized_name": "cow"}
++    # commodity must match the preloaded crop's normalized_name, or
++    # identity resolution falls through to find_or_create_crop (which
++    # this fake client leaves unconfigured, returning crop_id None) —
++    # _RESOURCE_1_RECORD's "Tomato" wouldn't resolve against "cow".
++    cow_record = {**_RESOURCE_1_RECORD, "commodity": "Cow"}
+     identity = _make_identity(mandis=[_KNOWN_MANDI], crops=[known_cow])
+ 
+     result = process_records(
+-        [_RESOURCE_1_RECORD],
++        [cow_record],
+         identity=identity,
+         unit="kg",
+         source=Source.RESOURCE_1,

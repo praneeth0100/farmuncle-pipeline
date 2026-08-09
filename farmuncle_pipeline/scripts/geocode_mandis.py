@@ -67,9 +67,31 @@ Strategy per mandi (Google only, nothing coarser, no OSM):
   hit from OSM.
 
 All writes go through the update_mandi_location() Supabase RPC so that:
-  - entity_history gets a proper audit trail
+  - audit_events gets a proper audit trail (old/new lat/lng/confidence + source)
   - a worse-confidence result can never clobber a better one already on file
-  - only ACTIVE mandis are touched (MERGED rows are skipped automatically by the RPC)
+  - only ACTIVE mandis are touched (MERGED and unknown mandi_ids are skipped)
+
+  2026-08-05: this RPC did not actually exist in the database before today
+  -- confirmed against the live project (0/2767 mandis had ever been
+  geocoded, and `update_mandi_location` was absent from
+  information_schema.routines). It's added in migration
+  20260805000000_add_update_mandi_location_rpc.sql. Everything above this
+  line describes behavior that was already correctly designed in this
+  script; the RPC it depended on just hadn't been created yet.
+
+  2026-08-05 additions (this revision):
+  - `extract_place_name()` now also strips a bare trailing "VFPCK" (not
+    just "VFPCK Market") -- affects 1 live Kerala mandi
+    ("Bharananganam VFPCK") that previously never got the village-name
+    fallback query.
+  - `_CORE_NAME_FILLER_WORDS` gained "uzhavar"/"sandhai"/"sandha" as a
+    safety net for Tamil Nadu rows -- today's data always has this
+    parenthesized ("X(Uzhavar Sandhai )"), which the existing paren-strip
+    already handled, so this only matters if a future row omits the parens.
+  - Every query variant tried for every mandi (not just the ones that
+    fail) is now written to a full audit CSV alongside the resolved place
+    name Google matched, so results can be spot-checked before being
+    trusted -- see AUDIT_LOG / audit_rows in run().
 
 Env vars required:
   SUPABASE_URL
@@ -93,6 +115,7 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 GOOGLE_SLEEP_SECONDS = 0.05  # Google allows much higher QPS, small buffer is enough
 
 NOT_FOUND_LOG = "mandis_needing_manual_geocoding.csv"
+AUDIT_LOG = "mandi_geocoding_audit.csv"  # 2026-08-05: every query tried for every mandi
 
 # Component types that indicate Google actually resolved down to a
 # specific place (village/town/city/neighbourhood level) rather than
@@ -110,15 +133,28 @@ from difflib import SequenceMatcher
 
 # Generic suffix/filler words that appear in mandi names or Google's
 # address components but carry no place-identifying information.
-# Mirrors mandi_core_name() in the database (v_audit_coordinate_mismatch /
-# check_mandi_coordinate_mismatch trigger, 2026-07-17) so the script's
-# in-flight check and the DB's after-the-fact safety net agree on what
-# counts as "the same place" -- deliberately kept in sync rather than
-# each drifting its own definition of a core name.
+# 2026-08-05 correction: earlier comments here claimed this list mirrors a
+# `mandi_core_name()` SQL function and a `check_mandi_coordinate_mismatch`
+# trigger. Neither exists in the database (checked information_schema.routines
+# directly) -- what DOES exist live is a `v_audit_coordinate_mismatch` VIEW
+# (not in any migration file either, so it's schema drift -- worth adding
+# as a migration separately) that flags same-coordinate ACTIVE-mandi pairs
+# using plain pg_trgm similarity() on normalized_name, not this filler-word
+# list. So this list is this script's own definition of "core name", not a
+# mirror of anything in the DB. It still plays the same conceptual role
+# (deciding whether two names refer to the same place) -- just isn't
+# actually kept in sync with a DB-side twin the way earlier comments implied.
 _CORE_NAME_FILLER_WORDS = {
     "apmc", "mandi", "market", "committee", "sub-yard", "sub", "yard",
     "vfpck", "grain", "veg", "new", "old", "north", "south", "main",
     "tal", "taluka", "dist", "district", "agriculture", "produce",
+    # 2026-08-05 addition: Tamil Nadu's "Uzhavar Sandhai" qualifier is
+    # always parenthesized in our data today (e.g. "Melur(Uzhavar
+    # Sandhai )"), so the parenthetical strip in _core_name/extract_place_name
+    # already drops it in every real row checked. These are here as a
+    # safety net in case a row ever shows up without the parens -- costs
+    # nothing (never matches outside TN) and prevents a silent regression.
+    "uzhavar", "sandhai", "sandha",
 }
 
 
@@ -189,9 +225,16 @@ def _result_locality_tokens(result: dict) -> set:
     return {t for t in tokens if t}
 
 
-def is_precise_enough(result: dict, query: str = "") -> bool:
+def _evaluate_result(result: dict, query: str = "") -> dict:
     """
-    Purpose:
+    Compute every precision/name-match diagnostic for one Google result
+    against the query that produced it -- both `is_precise_enough` (the
+    accept/reject gate) and the per-mandi audit CSV (added 2026-08-05) call
+    this, so the two can never silently disagree about what was actually
+    checked, and every accept/reject decision has a concrete "here's what
+    Google matched" record behind it instead of just a pass/fail boolean.
+
+    Purpose (of the checks themselves):
         Reject any Google Geocoding result that isn't actually
         village/town/city-level precision, even when Google's top-level
         `status` says `OK`. This is the check that was missing before
@@ -231,52 +274,97 @@ def is_precise_enough(result: dict, query: str = "") -> bool:
             check is skipped (i.e. old, weaker behavior) if omitted --
             callers within this script always pass it.
     Outputs:
-        True only if the result has at least one address component at
-        locality/village/town granularity or finer, that component's
-        name overlaps with the queried place name (when query is given),
-        AND (if Google marked it APPROXIMATE) still has one of those
-        components. False for anything resolved only to district/state/
+        A dict:
+          passes:            bool -- the same true/false is_precise_enough used to return
+          resolved_place:    comma-joined names of the fine-grained address
+                              component(s) Google actually matched (empty if none)
+          formatted_address: Google's full formatted_address for the result,
+                              as a fallback for the audit log even on a hard reject
+          location_type:     Google's geometry.location_type, e.g. "ROOFTOP",
+                              "APPROXIMATE"
+          match_score:       the 0-1 name-match score against the query's place
+                              name (empty string if query was not given)
+          partial_match:     Google's own partial_match flag
+        `passes` is True only if the result has at least one address
+        component at locality/village/town granularity or finer, and (when
+        query is given) that component's name overlaps with the queried
+        place name. False for anything resolved only to district/state/
         country level, false for Google's own partial-match flag, and
         false for a precise-but-mismatched substitute place.
     Failure modes:
         None raised -- malformed/missing fields just fall through to
-        False via .get() defaults, which is the safe direction (reject,
-        don't guess).
+        passes=False via .get() defaults, which is the safe direction
+        (reject, don't guess).
     """
-    if result.get("partial_match"):
-        return False
+    partial_match = bool(result.get("partial_match"))
     location_type = result.get("geometry", {}).get("location_type")
     components = result.get("address_components", [])
     component_types = set()
     for c in components:
         component_types.update(c.get("types", []))
     has_fine_grained = bool(component_types & _FINE_GRAINED_COMPONENT_TYPES)
-    if location_type == "APPROXIMATE" and not has_fine_grained:
-        return False
-    if not has_fine_grained:
-        return False
+    locality_names = [
+        c.get("long_name", "")
+        for c in components
+        if set(c.get("types", [])) & _FINE_GRAINED_COMPONENT_TYPES
+    ]
+    resolved_place = ", ".join(n for n in locality_names if n)
+
+    best_score = None
     if query:
         query_place = query.split(",")[0]
-        locality_names = [
-            c.get("long_name", "")
-            for c in components
-            if set(c.get("types", [])) & _FINE_GRAINED_COMPONENT_TYPES
-        ]
         # Same 0.3 threshold as the database's mandi_name_match_score /
         # v_audit_coordinate_mismatch, validated against every real
         # matched/mismatched pair found in the 2026-07-16/17 audits.
         best_score = max((_name_match_score(query_place, ln) for ln in locality_names), default=0.0)
-        if best_score < 0.3:
-            return False
-    return True
+
+    passes = (
+        not partial_match
+        and has_fine_grained
+        and (best_score is None or best_score >= 0.3)
+    )
+
+    return {
+        "passes": passes,
+        "resolved_place": resolved_place,
+        "formatted_address": result.get("formatted_address", ""),
+        "location_type": location_type or "",
+        "match_score": round(best_score, 2) if best_score is not None else "",
+        "partial_match": partial_match,
+    }
+
+
+def is_precise_enough(result: dict, query: str = "") -> bool:
+    """Thin wrapper around `_evaluate_result` -- kept as its own function
+    since that's the name the module docstring and other comments in this
+    file refer to as "the precision check"."""
+    return _evaluate_result(result, query)["passes"]
+
+
+def _empty_diag(query: str, status: str) -> dict:
+    """Diagnostic record for a query that got no usable result at all
+    (ZERO_RESULTS, an API error status, or a request exception) -- still
+    written to the audit CSV so a mandi's row shows every query that was
+    tried, not just the ones that returned something."""
+    return {
+        "query": query, "google_status": status, "resolved_place": "",
+        "formatted_address": "", "location_type": "", "match_score": "",
+        "passes": False, "partial_match": False,
+    }
 
 
 def google_lookup(query: str):
-    """Single Google Geocoding API query. Returns (lat, lng) if the top
-    result passes `is_precise_enough`, else (None, None) -- covers both
-    "Google found nothing" and "Google found something but it's only
-    district/state-level precision", the latter being exactly the
-    silent-fallback case this revision exists to catch."""
+    """Single Google Geocoding API query.
+    Returns (lat, lng, diagnostic) -- diagnostic is the `_evaluate_result`
+    dict (plus 'query' and 'google_status') describing what Google
+    returned and why it was accepted/rejected, so every attempt --
+    accepted, rejected, or empty -- can be written to the per-mandi audit
+    CSV for manual cross-checking (2026-08-05 addition).
+    lat/lng are None whenever the result was rejected or nothing was
+    found -- covers both "Google found nothing" and "Google found
+    something but it's only district/state-level precision or a
+    mismatched substitute place", the latter being exactly the
+    silent-fallback case the 2026-07-16 revision exists to catch."""
     try:
         r = requests.get(
             "https://maps.googleapis.com/maps/api/geocode/json",
@@ -287,20 +375,25 @@ def google_lookup(query: str):
         status = data.get("status")
         if status == "OK" and data.get("results"):
             result = data["results"][0]
-            if not is_precise_enough(result, query=query):
+            diag = _evaluate_result(result, query=query)
+            diag["query"] = query
+            diag["google_status"] = status
+            if not diag["passes"]:
                 print(f"    Google returned a result for '{query}' but it's not "
                       f"village/town-level precise or doesn't name-match "
-                      f"(location_type="
-                      f"{result.get('geometry', {}).get('location_type')}) -- rejected.")
-                return None, None
+                      f"(location_type={diag['location_type']}, matched "
+                      f"'{diag['resolved_place']}', score={diag['match_score']}) -- rejected.")
+                return None, None, diag
             loc = result["geometry"]["location"]
-            return float(loc["lat"]), float(loc["lng"])
-        elif status not in ("ZERO_RESULTS",):
+            print(f"    '{query}' -> matched '{diag['resolved_place']}' (score={diag['match_score']})")
+            return float(loc["lat"]), float(loc["lng"]), diag
+        if status != "ZERO_RESULTS":
             # OVER_QUERY_LIMIT, REQUEST_DENIED, INVALID_REQUEST etc - worth surfacing
             print(f"    Google API status='{status}' for '{query}': {data.get('error_message', '')}")
+        return None, None, _empty_diag(query, status or "UNKNOWN")
     except Exception as e:
         print(f"    Google error for '{query}': {e}")
-    return None, None
+        return None, None, _empty_diag(query, f"EXCEPTION: {e}")
 
 
 def extract_place_name(name: str):
@@ -318,6 +411,12 @@ def extract_place_name(name: str):
     suffixes_to_strip = [
         "vfpck market", "vfpck  market", "market", "apmc",
         "sub-yard", "sub yard", "mandi",
+        # 2026-08-05: bare "VFPCK" with no trailing "Market" word, e.g.
+        # "Bharananganam VFPCK" -- confirmed exactly 1 live row like this
+        # today, but without this the village-name fallback query never
+        # gets built for it since extract_place_name() returns the name
+        # unchanged.
+        "vfpck",
     ]
     cleaned = name.strip()
     cleaned_lower = cleaned.lower()
@@ -364,7 +463,13 @@ def build_candidate_queries(name: str, district: str, state: str):
 
 def geocode_mandi(name: str, district: str, state: str):
     """
-    Returns (lat, lng, location_confidence, source) or (None, None, None, None)
+    Returns (lat, lng, location_confidence, source, attempts).
+
+    attempts is a list of per-query diagnostic dicts (one per candidate
+    query tried, in that order) -- every attempt is recorded, whether it
+    succeeded, got rejected, or came back empty, so `run()` can write the
+    full trail to the audit CSV (2026-08-05 addition) rather than just the
+    final outcome.
 
     Tries Google only, across all query variants. Never returns DISTRICT
     or STATE level results (every candidate is precision-checked via
@@ -377,15 +482,17 @@ def geocode_mandi(name: str, district: str, state: str):
     state = state or ""
     candidate_queries = build_candidate_queries(name, district, state)
 
+    attempts = []
     for q in candidate_queries:
-        lat, lng = google_lookup(q)
+        lat, lng, diag = google_lookup(q)
         time.sleep(GOOGLE_SLEEP_SECONDS)
+        attempts.append(diag)
         if lat is not None and lng is not None:
-            return lat, lng, "EXACT", "google"
+            return lat, lng, "EXACT", "google", attempts
 
     # No precise hit on Google across any variant. Leave blank - do NOT
     # fall back to OSM or to district/state coordinates.
-    return None, None, None, None
+    return None, None, None, None, attempts
 
 
 def run():
@@ -417,14 +524,47 @@ def run():
 
     stats = {"EXACT": 0, "not_found": 0}
     not_found_rows = []
+    audit_rows = []
+    audit_fields = [
+        "mandi_id", "mandi_name", "district", "state", "attempt_number",
+        "query", "google_status", "resolved_place", "formatted_address",
+        "location_type", "match_score", "passed", "written_to_db",
+        "final_outcome",
+    ]
 
     for i, mandi in enumerate(all_mandis):
         label = f"{mandi['name']}, {mandi['district']}, {mandi['state']}"
         print(f"  [{i+1}/{total}] {label}")
 
-        lat, lng, confidence, source = geocode_mandi(mandi["name"], mandi["district"], mandi["state"])
+        lat, lng, confidence, source, attempts = geocode_mandi(
+            mandi["name"], mandi["district"], mandi["state"]
+        )
+        found = lat is not None and lng is not None
+        outcome = "EXACT" if found else "NOT_FOUND"
 
-        if lat is not None and lng is not None:
+        # Every query variant tried for this mandi gets its own audit row,
+        # so a rejected candidate (and *why* it was rejected -- what place
+        # it actually matched) is visible, not just the final yes/no.
+        for attempt_number, diag in enumerate(attempts, start=1):
+            written = found and diag is attempts[-1]
+            audit_rows.append({
+                "mandi_id": mandi["id"],
+                "mandi_name": mandi["name"],
+                "district": mandi["district"],
+                "state": mandi["state"],
+                "attempt_number": attempt_number,
+                "query": diag.get("query", ""),
+                "google_status": diag.get("google_status", ""),
+                "resolved_place": diag.get("resolved_place", ""),
+                "formatted_address": diag.get("formatted_address", ""),
+                "location_type": diag.get("location_type", ""),
+                "match_score": diag.get("match_score", ""),
+                "passed": diag.get("passes", False),
+                "written_to_db": written,
+                "final_outcome": outcome,
+            })
+
+        if found:
             supabase.rpc("update_mandi_location", {
                 "p_mandi_id": mandi["id"],
                 "p_latitude": lat,
@@ -449,6 +589,16 @@ def run():
             writer.writeheader()
             writer.writerows(not_found_rows)
         print(f"\n  List of mandis needing manual geocoding written to: {NOT_FOUND_LOG}")
+
+    if audit_rows:
+        with open(AUDIT_LOG, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=audit_fields)
+            writer.writeheader()
+            writer.writerows(audit_rows)
+        print(f"  Full per-mandi audit trail (every query tried, what Google matched, "
+              f"accept/reject) written to: {AUDIT_LOG}")
+        print(f"  -> Open this and spot-check a sample of 'written_to_db=True' rows "
+              f"against 'resolved_place' before trusting the bulk write.")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,68 @@
+name: geocode_mandis_v2
+
+# v2 geocoder: uses Google Places API (Text Search) instead of the
+# Geocoding API, so results can be actual market yards/POIs rather than
+# town/village centroids (see farmuncle_pipeline/geocoding/ for the
+# scorer/provider logic). OSM Nominatim used as free fallback + cross-
+# check. Writes go through update_mandi_location RPC.
+#
+# Manually triggered only. dry_run defaults to true -- always test a
+# small limit with dry_run=true first and check the audit CSV artifact
+# before running with dry_run=false.
+
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Max mandis to geocode this run (blank = all remaining in this batch)"
+        required: false
+        default: "10"
+      dry_run:
+        description: "Dry run (true = don't write to Supabase, just report)"
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      batch_size:
+        description: "How many NULL-coordinate mandis to pull this run"
+        required: false
+        default: "300"
+
+concurrency:
+  group: geocode-mandis-v2
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      - name: Run geocode_mandis_places (v2)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
+          GEOCODE_LIMIT: ${{ inputs.limit }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          BATCH_SIZE: ${{ inputs.batch_size }}
+        run: python farmuncle_pipeline/scripts/geocode_mandis_places.py
+
+      - name: Upload audit CSVs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: geocode-v2-audit-${{ github.run_id }}
+          path: |
+            mandi_geocoding_v2_audit.csv
+            mandis_needing_manual_geocoding_v2.csv
+          if-no-files-found: ignore

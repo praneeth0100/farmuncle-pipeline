@@ -138,7 +138,7 @@ def best_from_provider(provider_name, candidates, mandi_name, district, state, r
         result = score_candidate(c, mandi_name, district, state, distance_km=dist_km)
         if result["hard_reject"]:
             continue
-        if best is None or result["score"] > best["score"]:
+        if best is None or result["score"] > best_result["score"]:
             best, best_result = c, result
     return best, best_result
 

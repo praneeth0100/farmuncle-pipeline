@@ -55,7 +55,7 @@ jobs:
           GEOCODE_LIMIT: ${{ inputs.limit }}
           DRY_RUN: ${{ inputs.dry_run }}
           BATCH_SIZE: ${{ inputs.batch_size }}
-        run: python farmuncle_pipeline/scripts/geocode_mandis_places.py
+        run: python -m farmuncle_pipeline.scripts.geocode_mandis_places
 
       - name: Upload audit CSVs
         if: always()

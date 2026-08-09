@@ -110,7 +110,16 @@ class GooglePlacesProvider:
             )
             time.sleep(self.sleep_seconds)
             if resp.status_code != 200:
-                return [], {"status": f"HTTP_{resp.status_code}", "body": resp.text[:500]}
+                # Surface Google's actual error message (not just the code) --
+                # a bare "HTTP_403" tells you nothing about WHY (wrong API
+                # enabled, key restriction, billing, quota, malformed
+                # request); the response body's error.message field does.
+                try:
+                    err_msg = resp.json().get("error", {}).get("message", "")
+                except Exception:
+                    err_msg = ""
+                status_detail = f"HTTP_{resp.status_code}: {err_msg or resp.text[:200]}"
+                return [], {"status": status_detail}
             data = resp.json()
             places = data.get("places", [])
             candidates = []

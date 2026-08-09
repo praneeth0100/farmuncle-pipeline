@@ -115,6 +115,14 @@ def build_osm_queries(name, district, state):
     place_name = extract_place_name(name)
     if place_name.lower() != name.lower():
         queries.append(f"{place_name} market, {loc}")
+        # Bare place-name query, no market suffix at all -- this is the
+        # genuine last-resort fallback. It will often only surface an
+        # admin-only (locality) result, which the scorer correctly
+        # hard-rejects -- but if OSM happens to have the market itself
+        # tagged as a node near the village, a plain place-name search
+        # sometimes finds it when a suffixed query doesn't (Nominatim's
+        # matching is stricter about extra tokens than Places' is).
+        queries.append(f"{place_name}, {loc}")
     return queries
 
 

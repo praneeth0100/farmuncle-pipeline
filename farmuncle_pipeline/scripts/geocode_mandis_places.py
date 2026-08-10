@@ -261,6 +261,7 @@ def run():
                     "p_longitude": lng,
                     "p_location_confidence": confidence,
                     "p_source": "geocoding_v2_places_api",
+                    "p_matched_place": matched_name,
                 }).execute()
         else:
             print(f"    -> no confident market match (score={score}), left blank for manual review")

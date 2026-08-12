@@ -13,9 +13,21 @@ inline, so they're easy to tune later without hunting through logic --
 per the blueprint's "make them configurable" instruction.
 """
 
-from .name_normalizer import core_name, name_match_score
+from .name_normalizer import core_name, name_match_score, extract_place_name
 from .market_terminology import MARKET_INDICATOR_WORDS
 from .providers import haversine_km
+
+# Place types that mean a result is a government/administrative OFFICE
+# -- e.g. a district Mandi Board headquarters -- rather than the actual
+# market yard. These are real POIs (so is_admin_only() lets them
+# through) but a district-level board office is exactly as wrong an
+# answer for a specific town's mandi as a bare locality centroid is;
+# it's just wrong via a different type vocabulary. Added 2026-08-10
+# after live incident: "Punjab Mandi Board Ludhiana" got accepted for
+# 7+ different Ludhiana-district mandis (Doraha, Sahnewal, Jagraon...),
+# all landing on the identical coordinate -- the same class of failure
+# the admin-only-type check exists to prevent, just not covered by it.
+_INSTITUTIONAL_OFFICE_TYPES = {"government_office", "local_government_office"}
 
 # --- scoring weights (tune here, not inline) -------------------------
 WEIGHT_NAME_MATCH_MAX = 35        # scaled by name_match_score (0-1)
@@ -60,6 +72,24 @@ def score_candidate(candidate, mandi_name, district, state, distance_km=None):
             "score": 0, "reasons": ["admin-only type (locality/political/etc), no POI signal"],
             "hard_reject": True, "reject_reason": "admin_only_type",
         }
+
+    if candidate.place_types & _INSTITUTIONAL_OFFICE_TYPES:
+        place_token = core_name(extract_place_name(mandi_name))
+        cand_core = core_name(candidate.name)
+        # A government/board office is only a legitimate match if the
+        # actual place name shows up in it (e.g. a genuine "Karnal
+        # Mandi Board, Karnal" office named after the specific town) --
+        # if the specific place name is nowhere in the office's own
+        # name, this is almost certainly a district/state-level HQ that
+        # every mandi query in the district will fuzzy-match onto.
+        if not place_token or place_token not in cand_core:
+            return {
+                "score": 0,
+                "reasons": [f"government/board office result ('{candidate.name}') does not "
+                            f"name the specific place '{place_token}' -- likely a "
+                            f"district/state HQ, not this mandi's own market"],
+                "hard_reject": True, "reject_reason": "institutional_office_mismatch",
+            }
 
     if distance_km is not None and distance_km > DEFAULT_DISTANCE_REJECT_KM:
         return {

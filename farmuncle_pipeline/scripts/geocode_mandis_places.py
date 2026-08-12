@@ -59,13 +59,13 @@ from farmuncle_pipeline.geocoding.cache import (
     SupabaseQueryCache, candidate_to_dict, dict_to_candidate,
 )
 from farmuncle_pipeline.geocoding.market_terminology import market_terms_for_state
-from farmuncle_pipeline.geocoding.name_normalizer import extract_place_name
+from farmuncle_pipeline.geocoding.name_normalizer import extract_place_name, name_match_score
 from farmuncle_pipeline.geocoding.providers import (
     GooglePlacesProvider, OSMNominatimProvider, DistrictReference, haversine_km,
 )
 from farmuncle_pipeline.geocoding.scorer import (
     score_candidate, cross_check_agrees, classify_confidence,
-    WEIGHT_CROSS_CHECK_AGREEMENT,
+    WEIGHT_CROSS_CHECK_AGREEMENT, DEFAULT_DISTANCE_REJECT_KM,
 )
 
 SUPABASE_URL = os.environ["SUPABASE_URL"]
@@ -132,6 +132,47 @@ def build_osm_queries(name, district, state):
     return queries
 
 
+TOWN_FALLBACK_NAME_MATCH_MIN = 0.75  # how closely OSM's locality name must
+                                      # match the mandi's own extracted
+                                      # place name before we'll trust it
+                                      # as "this really is that town"
+
+
+def town_village_fallback(name, district, state, ref_point):
+    """Last-resort, explicitly lower-confidence fallback: when nothing
+    resolves to an actual market/POI, check whether OSM at least knows
+    the underlying town/village itself (a locality-type result) and
+    require it to be a close name match to the place extracted from the
+    mandi's own name -- not just "some locality OSM returned". Added
+    2026-08-10 per an explicit ask to make the search town/village-
+    specific rather than leaving these entirely blank, on the condition
+    that it's clearly flagged as approximate (never silently promoted
+    to the same trust level as an actual market match) and still
+    distance-sanity-checked against the district reference point, same
+    bound as everything else."""
+    place_name = extract_place_name(name)
+    if not place_name or place_name.lower() == name.lower():
+        return None  # nothing to strip down to, name IS the place name
+
+    query = f"{place_name}, {district}, {state}, India"
+    results, diag = cached_search("osm_nominatim_town_fallback", osm, query, is_places=False)
+    if not results:
+        return None
+
+    for c in results:
+        if not c.is_admin_only():
+            continue  # a real POI here would've already been caught upstream
+        nm = name_match_score(place_name, c.name)
+        if nm < TOWN_FALLBACK_NAME_MATCH_MIN:
+            continue
+        if ref_point and c.lat is not None:
+            dist_km = haversine_km(ref_point[0], ref_point[1], c.lat, c.lng)
+            if dist_km > DEFAULT_DISTANCE_REJECT_KM:
+                continue
+        return c, nm
+    return None
+
+
 def best_from_provider(provider_name, candidates, mandi_name, district, state, ref_point):
     """Scores every candidate from one provider's result set, returns
     the best-scoring one (or None if all hard-rejected / empty)."""
@@ -191,7 +232,24 @@ def geocode_mandi(name, district, state):
     elif best_osm is not None:
         chosen, chosen_result = best_osm, osm_result
     else:
-        return None, None, None, None, 0, ["no candidate survived scoring"], audit_trail
+        fallback = town_village_fallback(name, district, state, ref_point)
+        if fallback is None:
+            return None, None, None, None, 0, ["no candidate survived scoring"], audit_trail
+        town_candidate, nm = fallback
+        audit_trail.append({"provider": "osm_nominatim_town_fallback",
+                             "query": f"{extract_place_name(name)}, {district}, {state}, India",
+                             "status": "OK", "n_results": 1})
+        # Always REVIEW, never a higher tier -- this is a town/village
+        # centroid standing in for the actual market, not the market
+        # itself. Flagged plainly in matched_name so it can never be
+        # mistaken for a real POI match when read back later.
+        return (town_candidate.lat, town_candidate.lng, "REVIEW",
+                f"[TOWN CENTROID FALLBACK, verify] {town_candidate.name}",
+                round(nm * 100, 1),
+                [f"no market/POI match found -- fell back to town/village centroid "
+                 f"'{town_candidate.name}' (name_match={nm:.2f} against extracted "
+                 f"place name), needs manual verification before trusting"],
+                audit_trail)
 
     final_score = chosen_result["score"]
     reasons = list(chosen_result["reasons"])
@@ -228,6 +286,16 @@ def run():
     stats = {"HIGH": 0, "MEDIUM": 0, "LOW": 0, "REVIEW": 0, "unresolved": 0}
     not_found_rows = []
     audit_rows = []
+    # In-run duplicate-coordinate guard: catches the "many different
+    # mandis all silently land on one shared point" failure mode
+    # generically -- e.g. a district Mandi Board office (2026-08-10
+    # incident, since fixed at the scorer level) or any future/unknown
+    # cause with the same signature. If two DIFFERENT mandis in this
+    # run would write the identical (rounded) coordinate, the second
+    # one is downgraded to REVIEW rather than silently written at
+    # whatever confidence it scored -- real distinct markets essentially
+    # never share a coordinate to 4 decimal places (~11m).
+    used_coords_this_run = {}
 
     for i, mandi in enumerate(mandis):
         label = f"{mandi['name']}, {mandi['district']}, {mandi['state']}"
@@ -252,7 +320,16 @@ def run():
             })
 
         if found:
-            print(f"    -> {matched_name!r} @ {lat},{lng} [{confidence}, score={score}]")
+            coord_key = (round(lat, 4), round(lng, 4))
+            collision = used_coords_this_run.get(coord_key)
+            if collision is not None:
+                confidence = "REVIEW"
+                reasons.append(f"duplicate coordinate with mandi_id {collision} (this run) "
+                                f"-- downgraded to REVIEW, likely a shared wrong match")
+            else:
+                used_coords_this_run[coord_key] = mandi["id"]
+            print(f"    -> {matched_name!r} @ {lat},{lng} [{confidence}, score={score}]"
+                  + (" [COORD COLLISION]" if collision is not None else ""))
             stats[confidence] += 1
             if not DRY_RUN:
                 supabase.rpc("update_mandi_location", {

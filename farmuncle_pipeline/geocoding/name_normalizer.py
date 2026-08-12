@@ -21,6 +21,19 @@ CORE_NAME_FILLER_WORDS = {
     "vfpck", "grain", "veg", "new", "old", "north", "south", "main",
     "tal", "taluka", "dist", "district", "agriculture", "produce",
     "uzhavar", "sandhai", "sandha",
+    # Generic institutional/organizational words. Added 2026-08-10 after
+    # a live incident: "Sahnewal APMC Mandi Board" vs "Punjab Mandi
+    # Board Ludhiana" shared only the word "board" post-filtering, which
+    # (pre-fix) was enough for name_match_score's containment rule to
+    # force a perfect 1.0 match -- a district-level government office
+    # got accepted as if it were the specific local market. Without
+    # these in the filler set, ANY shared institutional word between a
+    # mandi name and a state/district-level board's name causes the
+    # same false match, regardless of the actual place. Stripping them
+    # forces the comparison down to the real place-identifying tokens.
+    "board", "society", "samiti", "office", "department", "govt",
+    "government", "corporation", "union", "sangh", "seva",
+    "cooperative", "co-operative", "state", "krishi", "upaj",
 }
 
 
@@ -44,14 +57,31 @@ def core_name(raw: str) -> str:
 
 def name_match_score(name_a: str, name_b: str) -> float:
     """Fuzzy match score (0-1) between two core names, combining a
-    whole-string similarity ratio with a containment check."""
+    whole-string similarity ratio with a containment check.
+
+    NOTE on the containment bonus: this used to force a flat 1.0
+    whenever the two names shared ANY post-filler word, on the theory
+    that a shared token is strong evidence of the same place ("Katol"
+    appearing in "Agriculture Produce Market Committee Katol"). That
+    reasoning breaks down for institutional-sounding names that still
+    have one coincidentally-shared word after filtering -- confirmed
+    live 2026-08-10 with "Sahnewal ... Board" vs "Punjab ... Board
+    Ludhiana" scoring a perfect 1.0 off the single word "board", even
+    though the rest of the names share nothing and refer to completely
+    different places. Expanding CORE_NAME_FILLER_WORDS closes that
+    specific case, but as defense-in-depth this now gives containment a
+    bounded bonus on top of the real similarity ratio instead of an
+    outright override -- a single weak/generic shared word can no
+    longer manufacture a perfect score by itself, while genuine
+    same-place matches (which also share most of the rest of the
+    string, so `ratio` is already decent) still land near 1.0."""
     ca, cb = core_name(name_a), core_name(name_b)
     if not ca or not cb:
         return 0.0
     ratio = SequenceMatcher(None, ca, cb).ratio()
     words_a, words_b = set(ca.split()), set(cb.split())
     contained = bool(words_a & words_b)
-    return max(ratio, 1.0 if contained else 0.0)
+    return min(1.0, ratio + (0.35 if contained else 0.0))
 
 
 def extract_place_name(name: str) -> str:

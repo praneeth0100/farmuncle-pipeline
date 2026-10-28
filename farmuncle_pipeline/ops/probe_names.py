@@ -10,6 +10,7 @@ from __future__ import annotations
 import difflib
 import os
 import sys
+import time
 
 import requests
 
@@ -23,14 +24,22 @@ URL = "https://www.data.gov.in/backend/dataapi/v1/resource/35985678-0d79-46b4-9e
 def _rows(state: str, day: str, key: str):
     off = 0
     while True:
-        r = requests.get(URL, params={"api-key": key, "format": "json", "limit": 1000, "offset": off,
-                                      "filters[State]": state, "filters[Arrival_Date]": day}, timeout=60)
-        r.raise_for_status()
+        for attempt in range(4):
+            try:
+                r = requests.get(URL, params={"api-key": key, "format": "json", "limit": 500, "offset": off,
+                                              "filters[State]": state, "filters[Arrival_Date]": day}, timeout=240)
+                r.raise_for_status()
+                break
+            except requests.RequestException as exc:
+                if attempt == 3:
+                    print(f"   WARNING {state} {day} offset {off}: gave up ({type(exc).__name__}); its names are missing from this report")
+                    return
+                time.sleep(5 * (attempt + 1))
         page = r.json().get("records") or []
         yield from page
-        if len(page) < 1000:
+        if len(page) < 500:
             return
-        off += 1000
+        off += 500
 
 
 def _all(db, table, cols):

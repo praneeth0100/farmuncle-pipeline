@@ -191,3 +191,12 @@ def test_a_clean_run_resolves_the_open_coverage_alert_for_that_day():
     assert ("update", {"status": "RESOLVED"}) in calls
     assert ("eq", "status", "OPEN") in calls and ("eq", "error_code", "QUALITY-002") in calls
     assert any(c[0] == "like" and "resource_1 on 29/10/2026" in c[2] for c in calls)
+
+
+def test_coverage_is_only_confirmed_when_the_check_ran_and_the_feed_answered():
+    from farmuncle_pipeline.core.state_coverage import coverage_is_confirmed
+
+    assert coverage_is_confirmed(nationwide_total=1000, gap=0, breaker_tripped=False)
+    assert not coverage_is_confirmed(nationwide_total=None, gap=0, breaker_tripped=False)   # the check itself failed
+    assert not coverage_is_confirmed(nationwide_total=1000, gap=0, breaker_tripped=True)    # the feed went quiet
+    assert not coverage_is_confirmed(nationwide_total=1000, gap=50, breaker_tripped=False)  # a real gap

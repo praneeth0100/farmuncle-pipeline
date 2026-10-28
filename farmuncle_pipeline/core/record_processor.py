@@ -46,6 +46,7 @@ from farmuncle_pipeline.config import ConfigError, NORMALIZATION_VERSION, PARSER
 from farmuncle_pipeline.core.identity_client import IdentityClient
 from farmuncle_pipeline.core.quality_scoring import compute_quality
 from farmuncle_pipeline.core.resource_client import is_blocked_record, parse_agmarknet_record
+from farmuncle_pipeline.government_constants import reports_per_kg
 
 
 @dataclass(frozen=True)
@@ -153,10 +154,13 @@ def process_records(
             row_min_price = parsed["min_price"]
             row_max_price = parsed["max_price"]
         else:
-            # A quintal price under Rs 100 would be under Re 1/kg, so the mandi typed
-            # Rs/kg into the per-quintal field: keep it, don't divide again.
+            # Prices are per quintal. A few markets (PER_KG_MARKETS) type Rs/kg instead; there, a
+            # value under Rs 100 (a quintal price that low would be under Re 1/kg) is kept as is.
             modal = parsed["modal_price"]
-            per_kg_reported = modal is not None and modal < PER_KG_REPORTED_BELOW
+            per_kg_reported = (
+                modal is not None and modal < PER_KG_REPORTED_BELOW
+                and reports_per_kg(parsed["state"], parsed["market"])
+            )
             divisor = 1 if per_kg_reported else 100
             row_modal_price = modal / divisor if modal is not None else None
             row_min_price = parsed["min_price"] / divisor if parsed["min_price"] is not None else None

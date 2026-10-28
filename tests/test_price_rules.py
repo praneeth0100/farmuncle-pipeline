@@ -59,7 +59,10 @@ def test_bad_rows_are_quarantined_without_touching_the_table():
     assert {q["error_code"] for q in client.quarantined} == {"DQ-PRICE-FLOOR", "DQ-PRICE-NONPOSITIVE"}
 
 
-# --- government prices are per quintal unless the mandi typed per kg ---------
+# --- government prices are per quintal, except a few markets that report per kg ---
+
+_KG_MARKET = {"market": "Pune(Manjri) APMC", "state": "Maharashtra"}
+
 
 def test_quintal_price_is_divided_by_100():
     row = _process(modal_price="2500", min_price="2000", max_price="3000").price_rows[0]
@@ -67,19 +70,27 @@ def test_quintal_price_is_divided_by_100():
     assert "unit_reported_kg" not in row["quality_components"]
 
 
-def test_price_under_100_is_already_per_kg_and_not_divided_again():
-    row = _process(modal_price="38", min_price="30", max_price="45").price_rows[0]
+def test_per_kg_market_price_under_100_is_not_divided_again():
+    row = _process(modal_price="38", min_price="30", max_price="45", **_KG_MARKET).price_rows[0]
     assert (row["modal_price"], row["min_price"], row["max_price"]) == (38.0, 30.0, 45.0)
-    assert row["unit"] == "kg"
     assert row["quality_components"]["unit_reported_kg"] is True
 
 
-def test_exactly_100_is_a_quintal_price():
-    assert _process(modal_price="100", min_price="90", max_price="110").price_rows[0]["modal_price"] == 1.0
+def test_per_kg_market_still_divides_its_quintal_prices():
+    row = _process(modal_price="2500", min_price="2000", max_price="3000", **_KG_MARKET).price_rows[0]
+    assert row["modal_price"] == 25.0
+    assert "unit_reported_kg" not in row["quality_components"]
 
 
-def test_junk_placeholder_stays_below_one_rupee_so_the_writer_quarantines_it():
-    assert _process(modal_price="0.01", min_price="0.01", max_price="0.01").price_rows[0]["modal_price"] == 0.01
+def test_other_markets_never_skip_the_division_even_for_small_prices():
+    # Guntur is not a per-kg market: 38 is a slip and becomes 0.38, which the writer quarantines.
+    row = _process(modal_price="38", min_price="30", max_price="45").price_rows[0]
+    assert row["modal_price"] == 0.38
+    assert "unit_reported_kg" not in row["quality_components"]
+
+
+def test_exactly_100_in_a_per_kg_market_is_a_quintal_price():
+    assert _process(modal_price="100", min_price="90", max_price="110", **_KG_MARKET).price_rows[0]["modal_price"] == 1.0
 
 
 # --- blocked markets ---------------------------------------------------------

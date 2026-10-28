@@ -47,8 +47,10 @@ class _Db:
     def __init__(self, rows):
         self.rows, self._a, self._b = rows, 0, 999
 
+    quarantine: list = []
+
     def table(self, name):
-        assert name == "mandi_daily_prices"
+        self.name = name
         return self
 
     def select(self, *a, **k):
@@ -65,7 +67,8 @@ class _Db:
         return self
 
     def execute(self):
-        return FakeResponse(data=self.rows[self._a : self._b + 1])
+        rows = self.rows if self.name == "mandi_daily_prices" else self.quarantine
+        return FakeResponse(data=rows[self._a : self._b + 1])
 
 
 class _Store:
@@ -97,6 +100,28 @@ def test_an_empty_day_uploads_nothing():
     store = _Store()
     assert archive_day(_Db([]), store, date(2026, 10, 1)).rows == 0
     assert store.objects == {}
+
+
+def test_quarantined_rows_are_archived_with_the_day_even_when_no_price_row_survived():
+    db = _Db([])
+    db.quarantine = [{"id": 1, "batch_id": "b", "resource": "r2", "row_data": {"price_date": "2026-10-01"},
+                      "created_at": None, "error_message": "x", "error_code": "DQ-PRICE-FLOOR",
+                      "review_status": None, "review_note": None}]
+    store = _Store()
+    result = archive_day(db, store, date(2026, 10, 1))
+    assert result.quarantined == 1
+    assert pq.read_table(io.BytesIO(store.objects["quarantine/date=2026-10-01.parquet"])).num_rows == 1
+
+
+def test_a_window_that_would_overrun_the_budget_is_not_started():
+    now = [0.0]
+    log = []
+    deps = _deps(log)
+    plain_ingest = deps["ingest_day"]
+    deps["ingest_day"] = lambda d: (now.__setitem__(0, now[0] + 120), plain_ingest(d))[1]  # each window takes 120s
+    n = run_backward(today=date(2026, 10, 29), oldest=date(2018, 1, 1), state=_State(date(2026, 10, 18)),
+                     window_days=1, budget_seconds=300, clock=lambda: now[0], **deps)
+    assert n == 2  # a third would end at 360s, past the 300s budget
 
 
 # --- windows -----------------------------------------------------------------

@@ -6,7 +6,7 @@ name: archive_history
 # run just continues. Does nothing until the MANDI_R2_* secrets exist.
 on:
   schedule:
-    - cron: "20 * * * *" # hourly; a run in progress queues the next one
+    - cron: "20 */6 * * *" # a run loops windows for ~5h (a window takes ~2h), so every 6h keeps it going without queueing
   workflow_dispatch:
     inputs:
       max_windows:

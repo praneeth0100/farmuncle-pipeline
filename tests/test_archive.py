@@ -207,3 +207,15 @@ def test_a_finished_history_does_nothing():
     state.done = True
     run_backward(today=date(2026, 10, 29), oldest=date(2026, 8, 1), state=state, **_deps(log))
     assert log == []
+
+
+def test_range_archive_takes_only_final_days_inside_the_range():
+    from farmuncle_pipeline.ingestion.archive_range import final_days
+
+    rows = [
+        {"price_date": "2026-10-28", "status": "PENDING"},
+        {"price_date": "2026-10-27", "status": "FINAL"},
+        {"price_date": "2026-10-19", "status": "FINAL"},
+        {"price_date": "2026-10-18", "status": "FINAL"},
+    ]
+    assert final_days(rows, date(2026, 10, 19), date(2026, 10, 28)) == [date(2026, 10, 19), date(2026, 10, 27)]

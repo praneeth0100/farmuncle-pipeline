@@ -4,18 +4,24 @@ name: archive_history
 # ingest the window from Resource 2, export each day to R2 as Parquet, verify the upload,
 # delete the window from the warehouse, repeat. Resumes from archive_state, so a stopped or failed
 # run just continues. Does nothing until the MANDI_R2_* secrets exist.
+# Each run that finishes a window starts the next run itself, so the loop continues until 2018
+# without waiting for the schedule. The schedule is a backstop in case a chained run fails.
 on:
   schedule:
-    - cron: "20 */3 * * *" # one window per run (about 40 min); every 3h gives 8 runs a day
+    - cron: "20 */3 * * *" # backstop; one window per run (about 40 min)
   workflow_dispatch:
     inputs:
       max_windows:
-        description: "Stop after this many windows (blank = run until the time budget)"
+        description: "Stop after this many windows (blank = one window per run)"
         required: false
 
 concurrency:
   group: warehouse-writer
   cancel-in-progress: false # a cancelled run would leave a half-ingested window and a RUNNING batch
+
+permissions:
+  contents: read
+  actions: write # lets a finished run start the next one
 
 jobs:
   run:
@@ -32,6 +38,7 @@ jobs:
 
       - name: Archive history
         env:
+          GH_TOKEN: ${{ github.token }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           DATA_GOV_API_KEY: ${{ secrets.DATA_GOV_API_KEY }}
@@ -45,6 +52,13 @@ jobs:
           MANDI_R2_SECRET_ACCESS_KEY: ${{ secrets.MANDI_R2_SECRET_ACCESS_KEY }}
           MANDI_R2_BUCKET: ${{ secrets.MANDI_R2_BUCKET }}
         run: |
+          set -o pipefail
           args="--budget-minutes 300 --max-windows 1"
           if [ -n "${{ github.event.inputs.max_windows }}" ]; then args="$args --max-windows ${{ github.event.inputs.max_windows }}"; fi
-          python -m farmuncle_pipeline.ingestion.archive_history $args
+          python -m farmuncle_pipeline.ingestion.archive_history $args | tee history.log
+          if grep -qE "windows completed this run: [1-9]" history.log; then
+            gh workflow run archive_history.yml --ref main
+            echo "next window started"
+          else
+            echo "no window finished; loop stops here (done, or waiting on the feed)"
+          fi

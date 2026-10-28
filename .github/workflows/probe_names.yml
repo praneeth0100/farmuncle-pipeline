@@ -25,4 +25,7 @@ jobs:
           DATA_GOV_API_KEY: ${{ secrets.DATA_GOV_API_KEY }}
           HISTORY_SUPABASE_URL: ${{ secrets.HISTORY_SUPABASE_URL }}
           HISTORY_SUPABASE_SERVICE_KEY: ${{ secrets.HISTORY_SUPABASE_SERVICE_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: python -m farmuncle_pipeline.ops.probe_names ${{ github.event.inputs.dates }}

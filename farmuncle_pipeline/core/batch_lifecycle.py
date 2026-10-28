@@ -565,6 +565,70 @@ def insert_failed_page(
         ) from exc
 
 
+def insert_coverage_gap(
+    client: "Client",
+    *,
+    batch_id: str,
+    resource: Resource,
+    state: str,
+    collected: int,
+    reported_total: int,
+    date_str: str,
+) -> bool:
+    """
+    Purpose:
+        A state returned fewer records than the government's own `total`
+        (QUALITY-001). Record it as page 1 of that state so
+        `retry_failed_pages` re-fetches the whole state; a coverage gap
+        is not a single failed page, so it used to be only printed and
+        never retried. At most one PENDING row per resource, state and
+        date: `live_tick` runs every 3 hours and would otherwise add one
+        row per tick for the same gap.
+    Inputs:
+        date_str: the target date as `DD/MM/YYYY`.
+    Outputs:
+        True if a row was inserted, False if one was already pending.
+    Failure modes:
+        Raises `ConfigError` if a query or the insert fails.
+    """
+    iso_date = datetime.strptime(date_str, "%d/%m/%Y").date().isoformat()
+    try:
+        pending = (
+            client.table("failed_pages")
+            .select("id,batch_id")
+            .eq("status", "PENDING")
+            .eq("resource", resource.value)
+            .eq("state", state)
+            .eq("error_code", "QUALITY-001")
+            .execute()
+        ).data or []
+        if pending:
+            batches = (
+                client.table("ingestion_batches")
+                .select("id,date_range_start")
+                .in_("id", [row["batch_id"] for row in pending])
+                .execute()
+            ).data or []
+            if any(b.get("date_range_start") == iso_date for b in batches):
+                return False
+    except Exception as exc:
+        raise ConfigError(f"Failed to check pending coverage gaps ({state}, {date_str}): {exc}") from exc
+
+    insert_failed_page(
+        client,
+        batch_id=batch_id,
+        resource=resource,
+        page=1,
+        error_code="QUALITY-001",
+        error_message=(
+            f"[coverage] {state} on {date_str}: collected {collected} of the "
+            f"government's reported total {reported_total}"
+        ),
+        state=state,
+    )
+    return True
+
+
 # =============================================================================
 # data_quality_issues (ops layer — permanent bad-data quarantine, NOT
 # retryable like failed_pages)

@@ -52,11 +52,18 @@ from farmuncle_pipeline.core.batch_lifecycle import (
     RawApiBatchHandle,
     complete_batch,
     complete_raw_batch,
+    insert_coverage_gap,
     insert_failed_page,
     start_batch,
     start_raw_batch,
 )
 from farmuncle_pipeline.core.api_params import build_params
+from farmuncle_pipeline.core.state_coverage import (
+    alert_state_coverage_gap,
+    fetch_nationwide_total,
+    gap_size,
+)
+from farmuncle_pipeline.government_constants import QUERY_STATES
 from farmuncle_pipeline.core.raw_dedup import upsert_raw_price_entries_batch
 from farmuncle_pipeline.core.identity_client import IdentityClient
 from farmuncle_pipeline.ingest_common import (
@@ -65,7 +72,6 @@ from farmuncle_pipeline.ingest_common import (
     IngestionBatchStatus,
     PARSER_VERSION,
     Resource,
-    STATES,
     Source,
     log_api_call,
 )
@@ -119,7 +125,7 @@ def _fetch_all_resource_2_pages(
 ) -> tuple[list, bool, int, int]:
     """
     Purpose:
-        Page through Resource 2, once per state in `STATES`, for a
+        Page through Resource 2, once per spelling in `QUERY_STATES` (every known name of each state), for a
         single date, accumulating every state's records. Unlike
         Resource 1 (queried by date alone), Resource 2's contract
         requires enumerating states (§9) — this function is the loop
@@ -166,8 +172,9 @@ def _fetch_all_resource_2_pages(
     all_states_complete = True
     states_with_any_success = 0
     total_pages = 0
+    covered_total = 0
 
-    for state in STATES:
+    for state in QUERY_STATES:
         offset = 0
         page_in_state = 0
         state_had_success = False
@@ -250,13 +257,55 @@ def _fetch_all_resource_2_pages(
         if state_had_success:
             states_with_any_success += 1
 
+        if reported_total is not None:
+            covered_total += int(reported_total)
+
         if reported_total is not None and state_record_count < reported_total:
             print(
                 f"[resource2_pipeline] QUALITY-001 WARNING: {state} reported total="
                 f"{reported_total} but only {state_record_count} record(s) collected "
-                f"for {date_str} -- coverage gap, not a page failure."
+                f"for {date_str} -- coverage gap, recorded in failed_pages for retry."
+            )
+            insert_coverage_gap(
+                supabase,
+                batch_id=batch_id,
+                resource=Resource.RESOURCE_2,
+                state=state,
+                collected=state_record_count,
+                reported_total=int(reported_total),
+                date_str=date_str,
             )
             all_states_complete = False
+
+    # A state name this pipeline does not query at all returns nothing and
+    # looks like a success; compare the per-state totals with the nationwide one.
+    nationwide_total = fetch_nationwide_total(
+        resource=Resource.RESOURCE_2,
+        api_key=api_key,
+        date_str=date_str,
+        url=runtime.api_base_resource_2,
+        headers=DEFAULT_HTTP_HEADERS,
+        timeout=runtime.api_timeout_seconds,
+        max_retries=runtime.max_retries,
+        retry_delay_seconds=runtime.retry_delay_seconds,
+    )
+    gap = gap_size(nationwide_total, covered_total)
+    if gap:
+        print(
+            f"[resource2_pipeline] QUALITY-002 WARNING: nationwide total {nationwide_total} "
+            f"for {date_str} but the queried states account for {covered_total} -- "
+            f"a state name is probably missing."
+        )
+        alert_state_coverage_gap(
+            supabase,
+            batch_id=batch_id,
+            resource=Resource.RESOURCE_2,
+            date_str=date_str,
+            gap=gap,
+            nationwide_total=nationwide_total,
+            covered_total=covered_total,
+        )
+        all_states_complete = False
 
     return records, all_states_complete, states_with_any_success, total_pages
 

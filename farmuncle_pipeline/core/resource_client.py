@@ -51,6 +51,8 @@ from dataclasses import dataclass
 
 import requests
 
+from farmuncle_pipeline.government_constants import canonical_state
+
 
 @dataclass(frozen=True)
 class PageFetchResult:
@@ -217,7 +219,8 @@ def parse_agmarknet_record(rec: dict) -> dict | None:
     return {
         "commodity": commodity,
         "market": market,
-        "state": state,
+        "state": canonical_state(state),
+        "raw_state": state,  # as the government sent it; raw storage keeps this
         "district": district,
         "raw_variety": raw_variety,
         "raw_grade": raw_grade,

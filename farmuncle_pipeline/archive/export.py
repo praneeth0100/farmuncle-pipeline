@@ -1,0 +1,76 @@
+"""Export one day of prices from the warehouse to R2 as Parquet, verified before anything is deleted."""
+
+from __future__ import annotations
+
+import hashlib
+import io
+import json
+from dataclasses import dataclass
+from datetime import date
+
+PAGE = 1000
+FACT_COLUMNS = (
+    "mandi_id", "crop_id", "variety_id", "grade_id", "price_date", "modal_price", "min_price", "max_price",
+    "unit", "source", "source_mandi_id", "quality_score", "quality_components",
+)
+
+
+class ArchiveError(RuntimeError):
+    """The upload could not be verified; nothing may be deleted from the warehouse."""
+
+
+@dataclass(frozen=True)
+class DayArchive:
+    day: date
+    rows: int
+    bytes: int
+    sha256: str | None
+
+
+def day_key(day: date) -> str:
+    return f"facts/daily/date={day.isoformat()}.parquet"
+
+
+def manifest_key(day: date) -> str:
+    return f"facts/manifest/date={day.isoformat()}.json"
+
+
+def fetch_day_rows(supabase, day: date) -> list[dict]:
+    rows: list[dict] = []
+    start = 0
+    while True:
+        page = (
+            supabase.table("mandi_daily_prices").select(",".join(FACT_COLUMNS))
+            .eq("price_date", day.isoformat()).order("id").range(start, start + PAGE - 1).execute().data or []
+        )
+        rows.extend(page)
+        if len(page) < PAGE:
+            return rows
+        start += PAGE
+
+
+def rows_to_parquet(rows: list[dict]) -> bytes:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    columns = {c: [r.get(c) for r in rows] for c in FACT_COLUMNS}
+    columns["quality_components"] = [json.dumps(v, separators=(",", ":")) if v is not None else None for v in columns["quality_components"]]
+    buf = io.BytesIO()
+    pq.write_table(pa.table(columns), buf, compression="zstd")
+    return buf.getvalue()
+
+
+def archive_day(supabase, store, day: date) -> DayArchive:
+    """Upload the day's Parquet and a manifest; raise ArchiveError unless the stored size matches."""
+    rows = fetch_day_rows(supabase, day)
+    if not rows:
+        return DayArchive(day, 0, 0, None)
+    data = rows_to_parquet(rows)
+    key = day_key(day)
+    store.put(key, data)
+    if store.size(key) != len(data):
+        raise ArchiveError(f"{key}: stored size does not match the {len(data)} bytes sent")
+    digest = hashlib.sha256(data).hexdigest()
+    manifest = {"date": day.isoformat(), "rows": len(rows), "bytes": len(data), "sha256": digest, "key": key}
+    store.put(manifest_key(day), json.dumps(manifest, indent=1).encode(), "application/json")
+    return DayArchive(day, len(rows), len(data), digest)

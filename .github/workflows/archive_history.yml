@@ -1,0 +1,50 @@
+name: archive_history
+
+# Fill price history backwards (newest window first, today -> 2018) in 10-day windows:
+# ingest the window from Resource 2, export each day to R2 as Parquet, verify the upload,
+# delete the window from the warehouse, repeat. Resumes from archive_state, so a stopped or failed
+# run just continues. Does nothing until the MANDI_R2_* secrets exist.
+on:
+  schedule:
+    - cron: "20 * * * *" # hourly; a run in progress queues the next one
+  workflow_dispatch:
+    inputs:
+      max_windows:
+        description: "Stop after this many windows (blank = run until the time budget)"
+        required: false
+
+concurrency:
+  group: archive-history
+  cancel-in-progress: false # a cancelled run would leave a half-ingested window and a RUNNING batch
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 345
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      - name: Archive history
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DATA_GOV_API_KEY: ${{ secrets.DATA_GOV_API_KEY }}
+          HISTORY_SUPABASE_URL: ${{ secrets.HISTORY_SUPABASE_URL }}
+          HISTORY_SUPABASE_SERVICE_KEY: ${{ secrets.HISTORY_SUPABASE_SERVICE_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          MANDI_R2_ACCOUNT_ID: ${{ secrets.MANDI_R2_ACCOUNT_ID }}
+          MANDI_R2_ACCESS_KEY_ID: ${{ secrets.MANDI_R2_ACCESS_KEY_ID }}
+          MANDI_R2_SECRET_ACCESS_KEY: ${{ secrets.MANDI_R2_SECRET_ACCESS_KEY }}
+          MANDI_R2_BUCKET: ${{ secrets.MANDI_R2_BUCKET }}
+        run: |
+          args="--budget-minutes 300"
+          if [ -n "${{ github.event.inputs.max_windows }}" ]; then args="$args --max-windows ${{ github.event.inputs.max_windows }}"; fi
+          python -m farmuncle_pipeline.ingestion.archive_history $args

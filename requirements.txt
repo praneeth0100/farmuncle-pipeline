@@ -1,2 +1,4 @@
 supabase==2.31.0
 requests==2.34.2
+pyarrow==26.0.0
+boto3==1.43.120

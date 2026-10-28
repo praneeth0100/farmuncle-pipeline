@@ -70,6 +70,7 @@ import argparse
 from datetime import date, datetime, timedelta, timezone
 
 from farmuncle_pipeline.core.batch_lifecycle import JobAlreadyRunningError
+from farmuncle_pipeline.core.ingest_days import decide, record_day_result
 from farmuncle_pipeline.core.price_cache import refresh_price_cache
 from farmuncle_pipeline.government_constants import QUERY_STATES
 from farmuncle_pipeline.ingest_common import IngestionBatchStatus, validate_startup
@@ -171,6 +172,21 @@ def run_historical_backfill(ctx, *, start_date: date, end_date: date) -> None:
             partial += 1
         else:
             failed += 1
+
+        # Keep ingest_days in step: a day filled here must not be refetched nightly.
+        decision = decide(
+            final_status=result.final_status.value,
+            total_records=result.total_records,
+            price_date=target_date,
+            today=datetime.now(_IST).date(),
+        )
+        record_day_result(
+            ctx.supabase,
+            price_date=target_date,
+            final=decision.final,
+            v2_rows=result.total_records,
+            note=decision.note,
+        )
 
         print(
             f"[historical_backfill] {target_date}: {result.final_status.value} — "

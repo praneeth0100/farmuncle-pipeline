@@ -57,6 +57,7 @@ Explicitly out of scope for this file:
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 from farmuncle_pipeline.config import ConfigError, Resource, Source
@@ -90,23 +91,50 @@ def _is_row_level_error(exc: Exception) -> bool:
     return any(code.startswith(prefix) for prefix in _ROW_LEVEL_ERROR_CODE_PREFIXES)
 
 
-def price_rule_violation(row: dict) -> str | None:
-    """Error code if `row` is a price that cannot be real, else None.
+# crop_id -> (fetched_at, median Rs/kg), refreshed at most once an hour per process.
+_median_cache: dict = {}
+_MEDIAN_TTL_SECONDS = 3600
+# A mandi that typed a per-kg price into a per-quintal field arrives ~100x too small.
+# Rescale only when the x100 value lands in this band around the crop's median.
+_RESCALE_BAND = (0.3, 3.0)
 
-    Checked before the bulk upsert so a day with dozens of bad government
-    rows doesn't push every chunk through the slow row-by-row fallback.
-    Ordering (min <= modal <= max) stays with the chk_prices_min_max
-    constraint.
+
+def _crop_medians(client) -> dict:
+    cached = _median_cache.get("medians")
+    if cached and time.monotonic() - cached[0] < _MEDIAN_TTL_SECONDS:
+        return cached[1]
+    try:
+        data = client.rpc("crop_price_medians").execute().data or []
+        medians = {int(r["crop_id"]): float(r["median"]) for r in data}
+    except Exception:  # no reference -> low prices are quarantined, never guessed
+        return {}
+    _median_cache["medians"] = (time.monotonic(), medians)
+    return medians
+
+
+def apply_price_rules(row: dict, median: float | None) -> tuple[dict | None, str | None]:
+    """(row to write, None) or (None, quarantine error code).
+
+    Checked before the bulk upsert so a day with dozens of bad government rows
+    doesn't push every chunk through the slow row-by-row fallback. Ordering
+    (min <= modal <= max) stays with the chk_prices_min_max constraint.
     """
     modal = row.get("modal_price")
     if modal is None:
-        return None
+        return row, None
     if modal <= 0:
-        return "DQ-PRICE-NONPOSITIVE"
-    # Under Rs 1/kg (Rs 100/quintal) is a government data-entry slip, not a price.
-    if row.get("unit") == "kg" and modal < 1:
-        return "DQ-PRICE-FLOOR"
-    return None
+        return None, "DQ-PRICE-NONPOSITIVE"
+    if row.get("unit") != "kg" or modal >= 1:
+        return row, None
+    # Under Rs 1/kg: a scale slip if x100 looks like this crop's price, else garbage.
+    if median and _RESCALE_BAND[0] <= modal * 100 / median <= _RESCALE_BAND[1] and modal * 100 >= 1:
+        fixed = {
+            **row,
+            **{k: round(row[k] * 100, 2) for k in ("modal_price", "min_price", "max_price") if row.get(k) is not None},
+            "quality_components": {**(row.get("quality_components") or {}), "scale_corrected": True},
+        }
+        return fixed, None
+    return None, "DQ-PRICE-FLOOR"
 
 
 @dataclass(frozen=True)
@@ -289,10 +317,11 @@ def upsert_price_rows(
 
     total_quarantined = 0
     kept: list[dict] = []
+    medians = _crop_medians(client) if any(r.get("unit") == "kg" and (r.get("modal_price") or 1) < 1 for r in rows) else {}
     for row in rows:
-        code = price_rule_violation(row)
+        fixed, code = apply_price_rules(row, medians.get(row.get("crop_id")))
         if code is None:
-            kept.append(row)
+            kept.append(fixed)
             continue
         if batch_id is None or resource is None:
             raise ConfigError(

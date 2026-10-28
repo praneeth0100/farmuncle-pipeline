@@ -190,7 +190,7 @@ def filter_rows_by_precedence(client, rows: list[dict], new_source: Source) -> t
         while True:
             page = (
                 client.table("mandi_daily_prices")
-                .select("id,mandi_id,crop_id,variety_id,grade_id,price_date,source")
+                .select("id,mandi_id,crop_id,variety_id,grade_id,price_date,source,source_mandi_id")
                 .in_("price_date", price_dates)
                 .order("id")
                 .range(start, start + _PAGE - 1)
@@ -209,15 +209,21 @@ def filter_rows_by_precedence(client, rows: list[dict], new_source: Source) -> t
         ) from exc
 
     existing_rank: dict[tuple, int] = {}
+    existing_own: dict[tuple, bool] = {}
     for existing in existing_rows:
         key = _canonical_key(existing)
         existing_rank[key] = max(existing_rank.get(key, 0), _SOURCE_RANK.get(existing["source"], 0))
+        existing_own[key] = _is_own_source(existing)
 
     kept: list[dict] = []
     skipped = 0
     for row in rows:
         key = _canonical_key(row)
-        if existing_rank.get(key, 0) > new_rank:
+        stored_rank = existing_rank.get(key, 0)
+        # Equal rank: a row from an alias source market never replaces the mandi's own stored row.
+        if stored_rank > new_rank or (
+            stored_rank == new_rank and existing_own.get(key) and not _is_own_source(row)
+        ):
             skipped += 1
             continue
         kept.append(row)

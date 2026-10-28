@@ -208,6 +208,22 @@ def test_filter_rows_by_precedence_matches_on_canonical_ids_not_text_or_source_m
     assert kept == [] and skipped == 1
 
 
+def test_filter_rows_by_precedence_alias_row_cannot_overwrite_the_mandis_own_row():
+    # Same source rank, but the stored row came from the mandi's own market and the new one from an alias.
+    existing = {**_price_row(), "source": Source.RESOURCE_2.value, "source_mandi_id": 1}
+    alias = {**_price_row(), "source_mandi_id": 2}
+    kept, skipped = filter_rows_by_precedence(_FakeSelectClient([existing]), [alias], Source.RESOURCE_2)
+    assert kept == [] and skipped == 1
+
+
+def test_filter_rows_by_precedence_own_row_may_replace_an_alias_row_and_itself():
+    alias_existing = {**_price_row(), "source": Source.RESOURCE_2.value, "source_mandi_id": 2}
+    own = {**_price_row(), "source_mandi_id": 1}
+    assert filter_rows_by_precedence(_FakeSelectClient([alias_existing]), [own], Source.RESOURCE_2) == ([own], 0)
+    own_existing = {**_price_row(), "source": Source.RESOURCE_2.value, "source_mandi_id": 1}
+    assert filter_rows_by_precedence(_FakeSelectClient([own_existing]), [own], Source.RESOURCE_2) == ([own], 0)
+
+
 def test_filter_rows_by_precedence_reads_every_page_of_existing_rows():
     # 2,500 existing rows; the protected one sits past PostgREST's 1,000-row cut-off.
     others = [{**_price_row(mandi_id=100 + i), "source": Source.RESOURCE_1.value} for i in range(2499)]

@@ -6,7 +6,8 @@
 with ranked as (
   select id, row_number() over (
            partition by mandi_id, crop_id, variety_id, grade_id, price_date
-           order by (source_mandi_id = mandi_id) desc, updated_at desc, id desc) rn
+           order by case source when 'manual' then 3 when 'resource_2' then 2 when 'resource_1' then 1 else 0 end desc,
+                     (source_mandi_id = mandi_id) desc, updated_at desc, id desc) rn
   from mandi_daily_prices
 ), doomed as (
   select p.* from mandi_daily_prices p join ranked r on r.id = p.id where r.rn > 1

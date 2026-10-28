@@ -1,4 +1,4 @@
-"""Peer comparison: a price a clean power of ten below the same crop elsewhere is multiplied back."""
+"""Peer comparison: a price 100x below the same crop elsewhere is multiplied back."""
 
 from __future__ import annotations
 
@@ -22,9 +22,14 @@ def test_spinach_example_from_the_owner():
     assert peer_scale(0.4, 0.3, 0.5, median=40.0) == (100, 40.0, 30.0, 50.0)
 
 
-def test_off_by_a_thousand_is_multiplied_back_too():
-    factor, modal, _, _ = peer_scale(0.04, 0.03, 0.05, median=40.0)
-    assert factor == 1000 and round(modal, 6) == 40.0
+def test_only_x100_is_ever_applied():
+    # 0.04 would need x1000 to reach 40: not guessed, left alone.
+    assert peer_scale(0.04, 0.03, 0.05, median=40.0) is None
+
+
+def test_jaggery_style_price_a_bit_above_the_median_is_accepted():
+    # Gur(Jaggery): 1.0 -> 100 against a median of 43 is a real price.
+    assert peer_scale(1.0, 1.0, 1.0, median=43.0)[1] == 100.0
 
 
 def test_normal_price_is_left_alone():

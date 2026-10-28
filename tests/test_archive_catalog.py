@@ -92,3 +92,22 @@ def test_state_starts_empty_then_records_progress():
 def test_state_reads_what_was_stored():
     state = SupabaseArchiveState(_StateDb({"next_end": "2026-10-08", "done": False, "windows_done": 3}))
     assert state.get() == date(2026, 10, 8)
+
+
+def test_r2_selfcheck_writes_and_reads_back_and_fails_on_a_size_mismatch():
+    import pytest
+    from farmuncle_pipeline.archive.store import R2Store
+
+    class _C:
+        def __init__(self, extra=0):
+            self.body, self.extra = None, extra
+
+        def put_object(self, Bucket, Key, Body, ContentType):
+            self.body = Body
+
+        def head_object(self, Bucket, Key):
+            return {"ContentLength": len(self.body) + self.extra}
+
+    R2Store(_C(), "b").selfcheck()
+    with pytest.raises(RuntimeError):
+        R2Store(_C(extra=1), "b").selfcheck()

@@ -35,6 +35,7 @@ def main() -> None:
     ctx = validate_startup()
     store = R2Store.from_env()
     store.ensure_bucket()
+    store.selfcheck()
     db = ctx.supabase
 
     done = run_backward(

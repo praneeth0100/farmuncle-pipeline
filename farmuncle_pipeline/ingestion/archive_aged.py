@@ -21,6 +21,7 @@ def main() -> None:
     db = ctx.supabase
     store = R2Store.from_env()
     store.ensure_bucket()
+    store.selfcheck()
     raw = db.rpc("aged_price_dates", {"p_keep_days": 11}).execute().data or []
     days = [date.fromisoformat(r if isinstance(r, str) else r["aged_price_dates"]) for r in raw]
     for day in days:

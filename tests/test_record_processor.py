@@ -85,7 +85,7 @@ _RESOURCE_2_RECORD = {
     "Max_Price": "3000",
 }
 
-_KNOWN_MANDI = {"id": 42, "normalized_name": "guntur apmc", "state": "Andhra Pradesh", "district": "Guntur"}
+_KNOWN_MANDI = {"id": 42, "normalized_name": "guntur", "state": "Andhra Pradesh", "district": "Guntur"}
 _KNOWN_CROP = {"id": 10, "normalized_name": "tomato"}
 
 

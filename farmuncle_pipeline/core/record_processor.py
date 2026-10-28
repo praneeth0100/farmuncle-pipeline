@@ -45,7 +45,7 @@ from dataclasses import dataclass
 from farmuncle_pipeline.config import ConfigError, NORMALIZATION_VERSION, PARSER_VERSION, PER_ANIMAL_CROP_IDS, Source
 from farmuncle_pipeline.core.identity_client import IdentityClient
 from farmuncle_pipeline.core.quality_scoring import compute_quality
-from farmuncle_pipeline.core.resource_client import parse_agmarknet_record
+from farmuncle_pipeline.core.resource_client import is_blocked_record, parse_agmarknet_record
 
 
 @dataclass(frozen=True)
@@ -55,6 +55,9 @@ class ProcessResult:
     resolution) — callers fold this count into their own `rows_failed`."""
     price_rows: list[dict]
     rows_failed: int
+
+
+PER_KG_REPORTED_BELOW = 100
 
 
 def process_records(
@@ -109,7 +112,8 @@ def process_records(
     for rec in records:
         parsed = parse_agmarknet_record(rec)
         if parsed is None:
-            rows_failed += 1
+            if not is_blocked_record(rec):
+                rows_failed += 1
             continue
 
         try:
@@ -142,15 +146,21 @@ def process_records(
         # for resolve_crop's first-creation bookkeeping, not for what
         # gets stored on the row.
         is_animal = crop.id in PER_ANIMAL_CROP_IDS
+        per_kg_reported = False
         row_unit = "animal" if is_animal else "kg"
         if is_animal:
             row_modal_price = parsed["modal_price"]
             row_min_price = parsed["min_price"]
             row_max_price = parsed["max_price"]
         else:
-            row_modal_price = parsed["modal_price"] / 100 if parsed["modal_price"] is not None else None
-            row_min_price = parsed["min_price"] / 100 if parsed["min_price"] is not None else None
-            row_max_price = parsed["max_price"] / 100 if parsed["max_price"] is not None else None
+            # A quintal price under Rs 100 would be under Re 1/kg, so the mandi typed
+            # Rs/kg into the per-quintal field: keep it, don't divide again.
+            modal = parsed["modal_price"]
+            per_kg_reported = modal is not None and modal < PER_KG_REPORTED_BELOW
+            divisor = 1 if per_kg_reported else 100
+            row_modal_price = modal / divisor if modal is not None else None
+            row_min_price = parsed["min_price"] / divisor if parsed["min_price"] is not None else None
+            row_max_price = parsed["max_price"] / divisor if parsed["max_price"] is not None else None
 
         quality = compute_quality(
             source=source,
@@ -195,7 +205,9 @@ def process_records(
                 "parser_version": PARSER_VERSION,
                 "normalization_version": NORMALIZATION_VERSION,
                 "quality_score": quality.score,
-                "quality_components": quality.components,
+                "quality_components": (
+                    {**quality.components, "unit_reported_kg": True} if per_kg_reported else quality.components
+                ),
             }
         )
 

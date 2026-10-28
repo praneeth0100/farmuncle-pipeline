@@ -101,3 +101,14 @@ def canonical_state(name: str) -> str:
     """The canonical state name for any known spelling; unknown names pass through."""
     name = name.strip()
     return STATE_ALIASES.get(name, name)
+
+
+# Markets whose feed is unusable (every price is a placeholder such as 0.01). Dropped at
+# parse time, so they never reach the raw or price tables. (state, market), case-insensitive.
+BLOCKED_MARKETS: Final[frozenset[tuple[str, str]]] = frozenset({
+    ("punjab", "patti apmc"),
+})
+
+
+def is_blocked_market(state: str, market: str) -> bool:
+    return (canonical_state(state).casefold(), market.strip().casefold()) in BLOCKED_MARKETS

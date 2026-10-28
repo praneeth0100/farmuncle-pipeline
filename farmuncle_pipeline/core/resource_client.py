@@ -52,7 +52,7 @@ from dataclasses import dataclass
 
 import requests
 
-from farmuncle_pipeline.government_constants import canonical_state
+from farmuncle_pipeline.government_constants import canonical_state, is_blocked_market
 
 
 @dataclass(frozen=True)
@@ -169,6 +169,12 @@ def fetch_page(
 # under its original name (`parse_resource_1_record`) via an alias, so
 # none of its own call sites needed to change.
 # =============================================================================
+def is_blocked_record(rec: dict) -> bool:
+    """True for a record from a blocked market (see BLOCKED_MARKETS): skipped, not a failure."""
+    rec_ci = {str(k).lower(): v for k, v in rec.items()}
+    return is_blocked_market(str(rec_ci.get("state") or ""), str(rec_ci.get("market") or ""))
+
+
 def parse_agmarknet_record(rec: dict) -> dict | None:
     """
     Purpose:
@@ -209,6 +215,8 @@ def parse_agmarknet_record(rec: dict) -> dict | None:
     arrival_date = rec_ci.get("arrival_date")
 
     if not commodity or not market or not state or not arrival_date:
+        return None
+    if is_blocked_market(state, market):
         return None
 
     try:

@@ -188,7 +188,7 @@ def upsert_raw_price_entries_batch(
             {
                 "resource": resource,
                 "market": parsed["market"],
-                "state": parsed["state"],
+                "state": parsed.get("raw_state") or parsed["state"],
                 "district": parsed["district"] or "",
                 "commodity": parsed["commodity"],
                 "raw_variety": parsed["raw_variety"] or "",

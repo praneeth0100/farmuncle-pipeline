@@ -85,8 +85,9 @@ def test_is_row_level_error_false_for_exception_with_no_code_attribute():
 # filter_rows_by_precedence
 # =============================================================================
 
-def _price_row(mandi_id=1, crop_id=1, variety="other", grade=None, price_date="2026-07-15"):
-    return {"mandi_id": mandi_id, "crop_id": crop_id, "variety": variety, "grade": grade, "price_date": price_date}
+def _price_row(mandi_id=1, crop_id=1, variety="other", grade=None, price_date="2026-07-15", variety_id=1, grade_id=1):
+    return {"mandi_id": mandi_id, "crop_id": crop_id, "variety": variety, "grade": grade, "price_date": price_date,
+            "variety_id": variety_id, "grade_id": grade_id}
 
 
 class _FakeSelectClient:
@@ -97,8 +98,11 @@ class _FakeSelectClient:
     under test only cares about the returned rows' business keys and
     source, not that the fake replays real date filtering)."""
 
-    def __init__(self, existing_rows: list[dict]):
+    def __init__(self, existing_rows: list[dict], max_rows: int = 1000):
         self._existing_rows = existing_rows
+        self._max_rows = max_rows  # PostgREST returns at most this many rows per request
+        self._start = 0
+        self._end = max_rows - 1
 
     def table(self, name):
         assert name == "mandi_daily_prices"
@@ -110,8 +114,15 @@ class _FakeSelectClient:
     def in_(self, *_args, **_kwargs):
         return self
 
+    def order(self, *_args, **_kwargs):
+        return self
+
+    def range(self, start, end):
+        self._start, self._end = start, min(end, start + self._max_rows - 1)
+        return self
+
     def execute(self):
-        return FakeResponse(data=self._existing_rows)
+        return FakeResponse(data=self._existing_rows[self._start : self._end + 1])
 
 
 def test_filter_rows_by_precedence_empty_input_short_circuits_without_query():
@@ -189,6 +200,39 @@ def test_filter_rows_by_precedence_only_blocks_matching_business_key():
     assert skipped == 0
 
 
+def test_filter_rows_by_precedence_matches_on_canonical_ids_not_text_or_source_mandi():
+    # The same price reported under another source market / spelling is the same key.
+    row = {**_price_row(variety="Tomato", grade="FAQ"), "source_mandi_id": 1}
+    existing = {**_price_row(variety="tomato", grade="faq"), "source": Source.RESOURCE_2.value, "source_mandi_id": 2}
+    kept, skipped = filter_rows_by_precedence(_FakeSelectClient([existing]), [row], Source.RESOURCE_1)
+    assert kept == [] and skipped == 1
+
+
+def test_filter_rows_by_precedence_alias_row_cannot_overwrite_the_mandis_own_row():
+    # Same source rank, but the stored row came from the mandi's own market and the new one from an alias.
+    existing = {**_price_row(), "source": Source.RESOURCE_2.value, "source_mandi_id": 1}
+    alias = {**_price_row(), "source_mandi_id": 2}
+    kept, skipped = filter_rows_by_precedence(_FakeSelectClient([existing]), [alias], Source.RESOURCE_2)
+    assert kept == [] and skipped == 1
+
+
+def test_filter_rows_by_precedence_own_row_may_replace_an_alias_row_and_itself():
+    alias_existing = {**_price_row(), "source": Source.RESOURCE_2.value, "source_mandi_id": 2}
+    own = {**_price_row(), "source_mandi_id": 1}
+    assert filter_rows_by_precedence(_FakeSelectClient([alias_existing]), [own], Source.RESOURCE_2) == ([own], 0)
+    own_existing = {**_price_row(), "source": Source.RESOURCE_2.value, "source_mandi_id": 1}
+    assert filter_rows_by_precedence(_FakeSelectClient([own_existing]), [own], Source.RESOURCE_2) == ([own], 0)
+
+
+def test_filter_rows_by_precedence_reads_every_page_of_existing_rows():
+    # 2,500 existing rows; the protected one sits past PostgREST's 1,000-row cut-off.
+    others = [{**_price_row(mandi_id=100 + i), "source": Source.RESOURCE_1.value} for i in range(2499)]
+    protected = {**_price_row(mandi_id=1), "source": Source.MANUAL.value}
+    existing = others[:2200] + [protected] + others[2200:]
+    kept, skipped = filter_rows_by_precedence(_FakeSelectClient(existing), [_price_row(mandi_id=1)], Source.RESOURCE_2)
+    assert kept == [] and skipped == 1
+
+
 def test_filter_rows_by_precedence_wraps_query_failure_in_config_error():
     class _FailingClient:
         def table(self, *_a, **_k):
@@ -198,6 +242,12 @@ def test_filter_rows_by_precedence_wraps_query_failure_in_config_error():
             return self
 
         def in_(self, *_a, **_k):
+            return self
+
+        def order(self, *_a, **_k):
+            return self
+
+        def range(self, *_a, **_k):
             return self
 
         def execute(self):
@@ -291,6 +341,44 @@ def test_upsert_price_rows_dedupes_by_business_key_last_one_wins():
     result = upsert_price_rows(client, [row_a, row_b], batch_size=1000)
     assert result.rows_upserted == 1
     assert client.upserted_rows == [row_b]  # last one wins
+
+
+def test_upsert_price_rows_collapses_the_same_price_reported_by_two_source_markets():
+    # Two source markets merged into one mandi, same crop/variety/grade/day: one row survives,
+    # and it is the one from the mandi's own id.
+    own = {**_price_row(), "source_mandi_id": 1, "modal_price": 100}
+    alias = {**_price_row(), "source_mandi_id": 2, "modal_price": 90}
+    client = _FakeUpsertClient()
+    assert upsert_price_rows(client, [own, alias], batch_size=10).rows_upserted == 1
+    assert client.upserted_rows == [own]
+    client = _FakeUpsertClient()
+    assert upsert_price_rows(client, [alias, own], batch_size=10).rows_upserted == 1
+    assert client.upserted_rows == [own]
+
+
+def test_upsert_price_rows_treats_text_case_variants_with_the_same_ids_as_one_key():
+    a = {**_price_row(variety="Tomato", grade="FAQ"), "modal_price": 100}
+    b = {**_price_row(variety="tomato", grade="faq"), "modal_price": 110}
+    client = _FakeUpsertClient()
+    assert upsert_price_rows(client, [a, b], batch_size=10).rows_upserted == 1
+
+
+def test_upsert_price_rows_conflict_target_is_the_canonical_key():
+    seen = {}
+
+    class _Spy(_FakeUpsertClient):
+        def table(self, name):
+            table = super().table(name)
+            if name == "mandi_daily_prices":
+                original = table.upsert
+                def upsert(rows, on_conflict=None):
+                    seen["on_conflict"] = on_conflict
+                    return original(rows, on_conflict=on_conflict)
+                table.upsert = upsert
+            return table
+
+    upsert_price_rows(_Spy(), [_price_row()], batch_size=10)
+    assert seen["on_conflict"] == "mandi_id,crop_id,variety_id,grade_id,price_date"
 
 
 def test_upsert_price_rows_chunks_by_batch_size():

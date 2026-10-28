@@ -196,6 +196,10 @@ class IdentityClient:
 
     def __init__(self, client: "Client") -> None:
         self._client = client
+        # (mandi_id, crop_id) pairs learned to report Rs/kg; see per_kg_pairs() in the warehouse.
+        self.per_kg_pairs: frozenset = frozenset()
+        # crop_id -> median Rs/kg over recent days, for peer_scale().
+        self.crop_medians: dict = {}
         self._mandi_cache: dict[tuple[str, str, str | None], int] = {}
         self._crop_cache: dict[str, int] = {}
         self._variety_cache: dict[str, str] = {}
@@ -434,6 +438,22 @@ class IdentityClient:
             (row["variety_id"], row["normalized_name"]): row["id"] for row in grade_rows
         }
         self._preloaded = True
+        self.per_kg_pairs = self._load_per_kg_pairs()
+        self.crop_medians = self._load_crop_medians()
+
+    def _load_per_kg_pairs(self) -> frozenset:
+        try:
+            data = self._client.rpc("per_kg_pairs", {}).execute().data or []
+            return frozenset((int(r["mandi_id"]), int(r["crop_id"])) for r in data)
+        except Exception:  # no evidence -> assume per quintal, never guess per kg
+            return frozenset()
+
+    def _load_crop_medians(self) -> dict:
+        try:
+            data = self._client.rpc("crop_price_medians", {}).execute().data or []
+            return {int(r["crop_id"]): float(r["median"]) for r in data}
+        except Exception:  # no peers -> prices are left as converted
+            return {}
 
     def resolve_mandi(
         self,

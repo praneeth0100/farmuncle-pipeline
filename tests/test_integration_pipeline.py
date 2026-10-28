@@ -80,7 +80,7 @@ class _FakeUpsertTable:
 
     def execute(self):
         for row in self._pending:
-            key = (row["mandi_id"], row["crop_id"], row["variety"], row.get("grade") or "", row["price_date"])
+            key = (row["mandi_id"], row["crop_id"], row["variety_id"], row["grade_id"], row["price_date"])
             self.store[key] = row
         return FakeResponse(data=self._pending)
 

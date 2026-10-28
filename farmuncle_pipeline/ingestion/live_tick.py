@@ -110,10 +110,18 @@ from farmuncle_pipeline.core.batch_lifecycle import (
     RawApiBatchHandle,
     complete_batch,
     complete_raw_batch,
+    insert_coverage_gap,
     insert_failed_page,
     start_batch,
     start_raw_batch,
 )
+from farmuncle_pipeline.core.api_params import build_params
+from farmuncle_pipeline.core.state_coverage import (
+    alert_state_coverage_gap,
+    fetch_nationwide_total,
+    gap_size,
+)
+from farmuncle_pipeline.government_constants import QUERY_STATES
 from farmuncle_pipeline.core.raw_dedup import upsert_raw_price_entries_batch
 from farmuncle_pipeline.core.identity_client import IdentityClient
 from farmuncle_pipeline.ingest_common import (
@@ -123,7 +131,6 @@ from farmuncle_pipeline.ingest_common import (
     PARSER_VERSION,
     Resource,
     Source,
-    STATES,
     log_api_call,
     time_api_call,
     validate_startup,
@@ -158,7 +165,7 @@ def _fetch_all_resource_1_pages(
 ) -> tuple[list, bool, int, int]:
     """
     Purpose:
-        Page through Resource 1, once per state in `STATES`, for a
+        Page through Resource 1, once per spelling in `QUERY_STATES` (every known name of each state), for a
         single date, accumulating every state's records. Writes one
         `api_call_logs` row per page and, on success, a batched
         `raw_price_entries` upsert per page (invariant 1: raw content
@@ -205,8 +212,9 @@ def _fetch_all_resource_1_pages(
     all_states_complete = True
     total_pages = 0
     states_with_any_success = 0
+    covered_total = 0
 
-    for state in STATES:
+    for state in QUERY_STATES:
         offset = 0
         page_in_state = 0
         state_record_count = 0
@@ -216,14 +224,14 @@ def _fetch_all_resource_1_pages(
         while True:
             page_in_state += 1
             total_pages += 1
-            params = {
-                "api-key": api_key,
-                "format": "json",
-                "limit": runtime.page_size,
-                "offset": offset,
-                "filters[arrival_date]": date_str,
-                "filters[state.keyword]": state,
-            }
+            params = build_params(
+                resource=Resource.RESOURCE_1,
+                api_key=api_key,
+                page_size=runtime.page_size,
+                offset=offset,
+                date_str=date_str,
+                state=state,
+            )
             result = fetch_page(
                 url=runtime.api_base_resource_1,
                 params=params,
@@ -257,9 +265,10 @@ def _fetch_all_resource_1_pages(
                     supabase,
                     batch_id=batch_id,
                     resource=Resource.RESOURCE_1,
-                    page=total_pages,
+                    page=page_in_state,
                     error_code="INGEST-002",
                     error_message=result.error or "unknown error after exhausting retries",
+                    state=state,
                 )
                 all_states_complete = False
                 break
@@ -296,13 +305,54 @@ def _fetch_all_resource_1_pages(
         if state_had_success:
             states_with_any_success += 1
 
+        if reported_total is not None:
+            covered_total += int(reported_total)
+
         if reported_total is not None and state_record_count < reported_total:
             print(
                 f"[live_tick] QUALITY-001 WARNING: {state} reported total={reported_total} "
                 f"but only {state_record_count} record(s) collected -- coverage gap, "
-                f"not a page failure (see _fetch_all_resource_1_pages docstring)."
+                f"recorded in failed_pages for retry."
+            )
+            insert_coverage_gap(
+                supabase,
+                batch_id=batch_id,
+                resource=Resource.RESOURCE_1,
+                state=state,
+                collected=state_record_count,
+                reported_total=int(reported_total),
+                date_str=date_str,
             )
             all_states_complete = False
+
+    # A state name this pipeline does not query at all returns nothing and
+    # looks like a success; compare the per-state totals with the nationwide one.
+    nationwide_total = fetch_nationwide_total(
+        resource=Resource.RESOURCE_1,
+        api_key=api_key,
+        date_str=date_str,
+        url=runtime.api_base_resource_1,
+        headers=DEFAULT_HTTP_HEADERS,
+        timeout=runtime.api_timeout_seconds,
+        max_retries=runtime.max_retries,
+        retry_delay_seconds=runtime.retry_delay_seconds,
+    )
+    gap = gap_size(nationwide_total, covered_total)
+    if gap:
+        print(
+            f"[live_tick] QUALITY-002 WARNING: nationwide total {nationwide_total} but the "
+            f"queried states account for {covered_total} -- a state name is probably missing."
+        )
+        alert_state_coverage_gap(
+            supabase,
+            batch_id=batch_id,
+            resource=Resource.RESOURCE_1,
+            date_str=date_str,
+            gap=gap,
+            nationwide_total=nationwide_total,
+            covered_total=covered_total,
+        )
+        all_states_complete = False
 
     return records, all_states_complete, total_pages, states_with_any_success
 
@@ -472,7 +522,7 @@ def run_live_tick(ctx) -> None:
         print(
             f"[live_tick] {final_status.value} — {len(price_rows)} row(s) upserted, "
             f"{rows_failed} skipped (parse/identity), {precedence_skipped} skipped (§8 precedence), "
-            f"{states_with_any_success}/{len(STATES)} states yielded data, "
+            f"{states_with_any_success}/{len(QUERY_STATES)} state queries yielded data, "
             f"{pages_fetched} page(s) fetched"
             + ("" if pagination_complete else " (incomplete — see failed_pages / QUALITY-001 warnings above)")
         )

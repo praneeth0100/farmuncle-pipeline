@@ -24,7 +24,7 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 45 # §24 target is <30 min; margin before treating it as hung
+    timeout-minutes: 120 # a night's backlog can be several dates of ~11 min each; the job itself stops starting new dates after 100 min
     steps:
       - uses: actions/checkout@v4
 

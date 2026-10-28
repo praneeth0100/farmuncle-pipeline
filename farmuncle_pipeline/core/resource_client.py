@@ -46,10 +46,13 @@ Explicitly out of scope for this file:
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass
 
 import requests
+
+from farmuncle_pipeline.government_constants import canonical_state, is_blocked_market
 
 
 @dataclass(frozen=True)
@@ -70,6 +73,11 @@ class PageFetchResult:
     raw_response: dict
     error: str | None
     duration_ms: int
+
+
+def _redact(text: str) -> str:
+    """Error text is stored in failed_pages; the key must never reach it."""
+    return re.sub(r"(api[-_]key=)[^&\s'\"]+", lambda m: m.group(1) + "***", text, flags=re.I)
 
 
 def fetch_page(
@@ -118,14 +126,19 @@ def fetch_page(
             response = requests.get(url, params=params, headers=headers, timeout=timeout)
             response.raise_for_status()
             data = response.json()
-            duration_ms = int((time.perf_counter() - start) * 1000)
-            return PageFetchResult(
-                ok=True,
-                records=data.get("records", []),
-                raw_response=data,
-                error=None,
-                duration_ms=duration_ms,
-            )
+            records = data.get("records") if isinstance(data, dict) else None
+            if isinstance(records, list):
+                duration_ms = int((time.perf_counter() - start) * 1000)
+                return PageFetchResult(
+                    ok=True,
+                    records=records,
+                    raw_response=data,
+                    error=None,
+                    duration_ms=duration_ms,
+                )
+            # data.gov.in reports quota and key errors as HTTP 200 with a
+            # different body. That is a failed page, never "zero records".
+            last_error = f"response has no 'records' list: {str(data)[:300]}"
         except requests.exceptions.Timeout as exc:
             last_error = f"timeout: {exc}"
         except requests.exceptions.RequestException as exc:
@@ -138,7 +151,8 @@ def fetch_page(
 
     duration_ms = int((time.perf_counter() - start) * 1000)
     return PageFetchResult(
-        ok=False, records=[], raw_response={}, error=last_error, duration_ms=duration_ms
+        ok=False, records=[], raw_response={},
+        error=_redact(last_error) if last_error else last_error, duration_ms=duration_ms
     )
 
 
@@ -155,6 +169,12 @@ def fetch_page(
 # under its original name (`parse_resource_1_record`) via an alias, so
 # none of its own call sites needed to change.
 # =============================================================================
+def is_blocked_record(rec: dict) -> bool:
+    """True for a record from a blocked market (see BLOCKED_MARKETS): skipped, not a failure."""
+    rec_ci = {str(k).lower(): v for k, v in rec.items()}
+    return is_blocked_market(str(rec_ci.get("state") or ""), str(rec_ci.get("market") or ""))
+
+
 def parse_agmarknet_record(rec: dict) -> dict | None:
     """
     Purpose:
@@ -196,6 +216,8 @@ def parse_agmarknet_record(rec: dict) -> dict | None:
 
     if not commodity or not market or not state or not arrival_date:
         return None
+    if is_blocked_market(state, market):
+        return None
 
     try:
         day, month, year = str(arrival_date).split("/")
@@ -212,7 +234,8 @@ def parse_agmarknet_record(rec: dict) -> dict | None:
     return {
         "commodity": commodity,
         "market": market,
-        "state": state,
+        "state": canonical_state(state),
+        "raw_state": state,  # as the government sent it; raw storage keeps this
         "district": district,
         "raw_variety": raw_variety,
         "raw_grade": raw_grade,

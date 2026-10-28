@@ -70,8 +70,10 @@ import argparse
 from datetime import date, datetime, timedelta, timezone
 
 from farmuncle_pipeline.core.batch_lifecycle import JobAlreadyRunningError
+from farmuncle_pipeline.core.ingest_days import decide, record_day_result
 from farmuncle_pipeline.core.price_cache import refresh_price_cache
-from farmuncle_pipeline.ingest_common import IngestionBatchStatus, STATES, validate_startup
+from farmuncle_pipeline.government_constants import QUERY_STATES
+from farmuncle_pipeline.ingest_common import IngestionBatchStatus, validate_startup
 from farmuncle_pipeline.core.resource2_pipeline import ingest_resource2_for_date
 
 JOB_NAME = "historical_backfill"
@@ -171,12 +173,27 @@ def run_historical_backfill(ctx, *, start_date: date, end_date: date) -> None:
         else:
             failed += 1
 
+        # Keep ingest_days in step: a day filled here must not be refetched nightly.
+        decision = decide(
+            final_status=result.final_status.value,
+            total_records=result.total_records,
+            price_date=target_date,
+            today=datetime.now(_IST).date(),
+        )
+        record_day_result(
+            ctx.supabase,
+            price_date=target_date,
+            final=decision.final,
+            v2_rows=result.total_records,
+            note=decision.note,
+        )
+
         print(
             f"[historical_backfill] {target_date}: {result.final_status.value} — "
             f"{result.rows_processed} row(s) processed, {result.rows_failed} skipped (parse/identity), "
             f"{result.rows_quarantined} quarantined (constraint violation), "
             f"{result.precedence_skipped} skipped (§8 precedence), "
-            f"{result.states_with_any_success}/{len(STATES)} states yielded data, "
+            f"{result.states_with_any_success}/{len(QUERY_STATES)} state queries yielded data, "
             f"{result.pages_fetched} page(s) fetched -- "
             f"timing: fetch={result.fetch_seconds:.1f}s, identity={result.identity_seconds:.1f}s, "
             f"upsert={result.upsert_seconds:.1f}s -- "

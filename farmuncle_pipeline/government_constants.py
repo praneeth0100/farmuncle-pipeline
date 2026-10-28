@@ -80,3 +80,36 @@ STATES: Final[tuple[str, ...]] = (
     "Chandigarh",
     "Andaman and Nicobar",
 )
+
+# Older spellings the feed used before renaming (probe of 13 dates, 2015-2026):
+# `Kerala` had ~1,300 rows a day until 2025 and `Keralam` returns nothing before
+# 2026; likewise Uttrakhand -> Uttarakhand and Pondicherry -> Puducherry. The exact
+# switch dates are unknown, so every spelling is queried for every date (the wrong
+# one just returns zero rows) and mapped to the canonical name that `mandis.state`
+# already uses.
+STATE_ALIASES: Final[dict[str, str]] = {
+    "Kerala": "Keralam",
+    "Uttrakhand": "Uttarakhand",
+    "Pondicherry": "Puducherry",
+}
+
+# Every state name to put in a `filters[...]` query: canonical names first.
+QUERY_STATES: Final[tuple[str, ...]] = STATES + tuple(STATE_ALIASES)
+
+
+def canonical_state(name: str) -> str:
+    """The canonical state name for any known spelling; unknown names pass through."""
+    name = name.strip()
+    return STATE_ALIASES.get(name, name)
+
+
+# Markets whose feed is unusable (every price is a placeholder such as 0.01). Dropped at
+# parse time, so they never reach the raw or price tables. (state, market), case-insensitive.
+BLOCKED_MARKETS: Final[frozenset[tuple[str, str]]] = frozenset({
+    ("punjab", "patti apmc"),
+})
+
+
+def is_blocked_market(state: str, market: str) -> bool:
+    return (canonical_state(state).casefold(), market.strip().casefold()) in BLOCKED_MARKETS
+

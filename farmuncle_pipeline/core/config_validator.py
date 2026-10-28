@@ -132,6 +132,7 @@ _REQUIRED_TABLES: Final[tuple[str, ...]] = (
     "system_config",
     "ingestion_batches",
     "failed_pages",
+    "ingest_days",
     "api_call_logs",
     "mandi_daily_prices",
     "price_cache",

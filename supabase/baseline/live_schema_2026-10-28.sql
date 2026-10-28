@@ -1,0 +1,1964 @@
+-- BASELINE of the live warehouse schema (flxjrcbhmcuaynctokpv), generated 2026-10-28 from the catalogs.
+-- Reference only: NOT a migration and NOT applied anywhere. The migrations in supabase/migrations/
+-- do not reproduce the live database (45 applied migrations are missing from the repo; see the
+-- audit in the app repo, docs/Pipeline_Audit.md section 4). Untested: never run against an empty database.
+-- Contents: extension, tables, constraints, foreign keys, indexes, functions, views, triggers, RLS, grants,
+-- system_config seed rows. Data tables (aliases, mandis, prices) are not included.
+
+set check_function_bodies = off;
+
+create schema if not exists extensions;
+
+create extension if not exists pg_trgm with schema extensions;
+
+create table if not exists public.api_call_logs (
+  id bigint generated always as identity not null,
+  batch_id text,
+  resource text,
+  state text,
+  page integer,
+  status text,
+  rows integer,
+  error_code text,
+  error_message text,
+  called_at timestamp with time zone default now() not null,
+  job_name text,
+  duration_ms integer
+);
+
+create table if not exists public.audit_events (
+  id bigint generated always as identity not null,
+  batch_id text,
+  entity_type text,
+  entity_id bigint,
+  event_type text,
+  details jsonb,
+  created_at timestamp with time zone default now() not null
+);
+
+create table if not exists public.compression_runs (
+  id bigint generated always as identity not null,
+  week_start_date date,
+  status text,
+  verification_hash text,
+  created_at timestamp with time zone default now() not null
+);
+
+create table if not exists public.coverage_reports (
+  id bigint generated always as identity not null,
+  batch_id text,
+  report_date date,
+  expected_count integer,
+  actual_count integer,
+  created_at timestamp with time zone default now() not null,
+  scope text default 'NIGHTLY_AUDIT'::text not null,
+  coverage_pct numeric,
+  details jsonb
+);
+
+create table if not exists public.crop_aliases (
+  id bigint generated always as identity not null,
+  crop_id bigint not null,
+  alias_name text not null,
+  normalized_alias text not null,
+  match_method text,
+  match_confidence numeric,
+  approved boolean default false not null,
+  source text,
+  created_at timestamp with time zone default now() not null,
+  normalization_version integer default 1 not null
+);
+
+create table if not exists public.crop_duplicate_review_queue (
+  id bigint generated always as identity not null,
+  crop_id_a bigint not null,
+  crop_id_b bigint not null,
+  similarity numeric,
+  created_at timestamp with time zone default now() not null,
+  resolved boolean default false not null,
+  resolution text
+);
+
+create table if not exists public.crops (
+  id bigint generated always as identity not null,
+  name text not null,
+  normalized_name text not null,
+  category text,
+  unit text,
+  taxonomy_version integer default 1 not null,
+  status text default 'ACTIVE'::text not null,
+  review_status text default 'AUTO_CREATED'::text not null,
+  merged_into_id bigint,
+  merge_reason text,
+  merge_method text,
+  merge_confidence numeric,
+  merged_at timestamp with time zone,
+  ingested_from text,
+  first_seen_at timestamp with time zone default now() not null,
+  last_seen_at timestamp with time zone default now() not null,
+  last_verified_at timestamp with time zone,
+  created_at timestamp with time zone default now() not null,
+  display_unit text default 'Quintal'::text not null,
+  unit_divisor numeric default 1 not null
+);
+
+create table if not exists public.data_quality_issues (
+  id bigint generated always as identity not null,
+  batch_id text,
+  resource text,
+  row_data jsonb,
+  created_at timestamp with time zone default now() not null,
+  error_message text,
+  error_code text,
+  review_status text default 'PENDING'::text not null,
+  review_note text,
+  reviewed_at timestamp with time zone
+);
+
+create table if not exists public.district_aliases (
+  id bigint generated always as identity not null,
+  state text not null,
+  alias_district text not null,
+  canonical_district text not null,
+  reason text,
+  created_at timestamp with time zone default now() not null
+);
+
+create table if not exists public.entity_history (
+  id bigint generated always as identity not null,
+  batch_id text,
+  entity_type text,
+  entity_id bigint,
+  field_name text,
+  old_value text,
+  new_value text,
+  created_at timestamp with time zone default now() not null,
+  rpc_version integer default 1 not null
+);
+
+create table if not exists public.failed_pages (
+  id bigint generated always as identity not null,
+  batch_id text not null,
+  resource text not null,
+  state text,
+  page integer,
+  error_message text,
+  status text default 'PENDING'::text not null,
+  created_at timestamp with time zone default now() not null,
+  resolved_at timestamp with time zone,
+  error_code text
+);
+
+create table if not exists public.grade_aliases (
+  id bigint generated by default as identity not null,
+  grade_id bigint not null,
+  alias_name text not null,
+  normalized_alias text not null,
+  match_method text,
+  match_confidence numeric,
+  approved boolean default false not null,
+  source text,
+  created_at timestamp with time zone default now() not null
+);
+
+create table if not exists public.grade_duplicate_review_queue (
+  id bigint generated by default as identity not null,
+  grade_id_a bigint not null,
+  grade_id_b bigint not null,
+  similarity numeric,
+  created_at timestamp with time zone default now() not null,
+  resolved boolean default false not null,
+  resolution text
+);
+
+create table if not exists public.grades (
+  id bigint generated always as identity not null,
+  variety_id bigint not null,
+  name text not null,
+  normalized_name text not null,
+  created_at timestamp with time zone default now() not null,
+  status text default 'ACTIVE'::text not null,
+  merged_into_id bigint,
+  merge_reason text,
+  merge_method text,
+  merge_confidence numeric,
+  merged_at timestamp with time zone
+);
+
+create table if not exists public.historical_jobs (
+  id bigint generated always as identity not null,
+  compression_run_id bigint,
+  status text,
+  created_at timestamp with time zone default now() not null
+);
+
+create table if not exists public.ingestion_batches (
+  id text not null,
+  job_name text not null,
+  resource text,
+  date_range_start date,
+  date_range_end date,
+  started_at timestamp with time zone default now() not null,
+  completed_at timestamp with time zone,
+  status text default 'RUNNING'::text not null,
+  rows_processed integer default 0,
+  rows_failed integer default 0,
+  error_summary text,
+  schema_version integer default 1 not null
+);
+
+create table if not exists public.mandi_aliases (
+  id bigint generated always as identity not null,
+  mandi_id bigint not null,
+  alias_name text not null,
+  normalized_alias text not null,
+  match_method text,
+  match_confidence numeric,
+  approved boolean default false not null,
+  source text,
+  created_at timestamp with time zone default now() not null,
+  normalization_version integer default 1 not null
+);
+
+create table if not exists public.mandi_daily_prices (
+  id bigint generated always as identity not null,
+  mandi_id bigint not null,
+  crop_id bigint not null,
+  variety text default ''::text not null,
+  grade text default ''::text not null,
+  variety_id bigint,
+  grade_id bigint,
+  price_date date not null,
+  modal_price numeric,
+  min_price numeric,
+  max_price numeric,
+  unit text,
+  source text not null,
+  source_mandi_id bigint,
+  source_mandi_name text,
+  quality_score numeric,
+  quality_components jsonb,
+  created_at timestamp with time zone default now() not null,
+  updated_at timestamp with time zone default now() not null,
+  parser_version integer,
+  normalization_version integer,
+  batch_id text,
+  raw_api_batch_id text
+);
+
+create table if not exists public.mandi_duplicate_review_queue (
+  id bigint generated always as identity not null,
+  mandi_id_a bigint not null,
+  mandi_id_b bigint not null,
+  state text,
+  district text,
+  similarity numeric,
+  created_at timestamp with time zone default now() not null,
+  resolved boolean default false not null,
+  resolution text
+);
+
+create table if not exists public.mandi_location_search_cache (
+  id bigint generated always as identity not null,
+  provider text not null,
+  query text not null,
+  response jsonb not null,
+  created_at timestamp with time zone default now() not null
+);
+
+create table if not exists public.mandis (
+  id bigint generated always as identity not null,
+  slug text not null,
+  name text not null,
+  normalized_name text not null,
+  state text not null,
+  district text not null,
+  taluk text,
+  latitude double precision,
+  longitude double precision,
+  location_confidence text,
+  status text default 'ACTIVE'::text not null,
+  review_status text default 'AUTO_CREATED'::text not null,
+  merged_into_id bigint,
+  merge_reason text,
+  merge_method text,
+  merge_confidence numeric,
+  merged_at timestamp with time zone,
+  ingested_from text,
+  first_seen_at timestamp with time zone default now() not null,
+  last_seen_at timestamp with time zone default now() not null,
+  last_verified_at timestamp with time zone,
+  created_at timestamp with time zone default now() not null,
+  location_matched_place text
+);
+
+create table if not exists public.price_cache (
+  mandi_id bigint not null,
+  crop_id bigint not null,
+  variety text default ''::text not null,
+  grade text default ''::text not null,
+  latest_price_date date,
+  modal_price numeric,
+  min_price numeric,
+  max_price numeric,
+  source_mandi_name text,
+  change_1d numeric,
+  change_1d_pct numeric,
+  change_7d numeric,
+  change_7d_pct numeric,
+  change_1m numeric,
+  change_1m_pct numeric,
+  last_recomputed_at timestamp with time zone,
+  refreshed_at timestamp with time zone default now() not null,
+  variety_id bigint not null,
+  grade_id bigint not null
+);
+
+create table if not exists public.price_cache_refresh_state (
+  id smallint default 1 not null,
+  last_processed_at timestamp with time zone default '-infinity'::timestamp with time zone not null
+);
+
+create table if not exists public.quality_alerts (
+  id bigint generated always as identity not null,
+  batch_id text,
+  coverage_report_id bigint,
+  severity text,
+  status text default 'OPEN'::text not null,
+  error_code text,
+  message text,
+  created_at timestamp with time zone default now() not null,
+  entity_type text,
+  entity_id bigint
+);
+
+create table if not exists public.raw_api_batches (
+  id text not null,
+  job_name text not null,
+  resource text not null,
+  date_range_start date,
+  date_range_end date,
+  started_at timestamp with time zone default now() not null,
+  completed_at timestamp with time zone,
+  status text default 'RUNNING'::text not null,
+  total_pages integer default 0,
+  total_records integer default 0,
+  error_summary text,
+  schema_version integer default 1 not null
+);
+
+create table if not exists public.raw_price_entries (
+  id bigint generated always as identity not null,
+  resource text not null,
+  market text not null,
+  state text not null,
+  district text not null,
+  commodity text not null,
+  raw_variety text,
+  raw_grade text,
+  price_date date not null,
+  modal_price numeric,
+  min_price numeric,
+  max_price numeric,
+  content_hash text not null,
+  payload jsonb,
+  parser_version integer default 1 not null,
+  first_seen_batch_id text not null,
+  last_seen_batch_id text not null,
+  first_seen_at timestamp with time zone default now() not null,
+  last_seen_at timestamp with time zone default now() not null
+);
+
+create table if not exists public.suspicious_price_review (
+  id bigint generated always as identity not null,
+  original_id bigint,
+  mandi_id bigint,
+  crop_id bigint,
+  variety text,
+  grade text,
+  price_date date,
+  min_price numeric,
+  max_price numeric,
+  modal_price numeric,
+  unit text,
+  reason text,
+  flagged_at timestamp with time zone default now(),
+  reviewed boolean default false,
+  corrected_min numeric,
+  corrected_max numeric,
+  corrected_modal numeric,
+  reviewer_notes text
+);
+
+create table if not exists public.system_config (
+  key text not null,
+  value text not null,
+  updated_at timestamp with time zone default now() not null
+);
+
+create table if not exists public.varieties (
+  id bigint generated always as identity not null,
+  crop_id bigint not null,
+  name text not null,
+  normalized_name text not null,
+  created_at timestamp with time zone default now() not null,
+  status text default 'ACTIVE'::text not null,
+  merged_into_id bigint,
+  merge_reason text,
+  merge_method text,
+  merge_confidence numeric,
+  merged_at timestamp with time zone
+);
+
+create table if not exists public.variety_aliases (
+  id bigint generated always as identity not null,
+  variety_id bigint not null,
+  alias_name text not null,
+  normalized_alias text not null,
+  match_method text,
+  approved boolean default false not null,
+  created_at timestamp with time zone default now() not null
+);
+
+create table if not exists public.variety_duplicate_review_queue (
+  id bigint generated by default as identity not null,
+  variety_id_a bigint not null,
+  variety_id_b bigint not null,
+  similarity numeric,
+  created_at timestamp with time zone default now() not null,
+  resolved boolean default false not null,
+  resolution text
+);
+
+alter table api_call_logs add constraint api_call_logs_pkey PRIMARY KEY (id);
+
+alter table audit_events add constraint audit_events_pkey PRIMARY KEY (id);
+
+alter table compression_runs add constraint compression_runs_pkey PRIMARY KEY (id);
+
+alter table compression_runs add constraint compression_runs_status_check CHECK ((status = ANY (ARRAY['PENDING'::text, 'WRITTEN'::text, 'VERIFIED'::text, 'DELETED'::text, 'FAILED'::text])));
+
+alter table coverage_reports add constraint coverage_reports_pkey PRIMARY KEY (id);
+
+alter table crop_aliases add constraint crop_aliases_match_method_check CHECK ((match_method = ANY (ARRAY['EXACT'::text, 'NORMALIZED'::text, 'FUZZY'::text, 'MANUAL'::text])));
+
+alter table crop_aliases add constraint crop_aliases_normalized_alias_key UNIQUE (normalized_alias);
+
+alter table crop_aliases add constraint crop_aliases_pkey PRIMARY KEY (id);
+
+alter table crop_duplicate_review_queue add constraint crop_duplicate_review_queue_pkey PRIMARY KEY (id);
+
+alter table crops add constraint crops_merge_method_check CHECK ((merge_method = ANY (ARRAY['EXACT'::text, 'NORMALIZED'::text, 'FUZZY'::text, 'MANUAL'::text])));
+
+alter table crops add constraint crops_pkey PRIMARY KEY (id);
+
+alter table crops add constraint crops_review_status_check CHECK ((review_status = ANY (ARRAY['AUTO_CREATED'::text, 'NEEDS_REVIEW'::text, 'VERIFIED'::text, 'REJECTED'::text])));
+
+alter table crops add constraint crops_status_check CHECK ((status = ANY (ARRAY['ACTIVE'::text, 'MERGED'::text, 'INACTIVE'::text, 'UNKNOWN'::text])));
+
+alter table data_quality_issues add constraint data_quality_issues_pkey PRIMARY KEY (id);
+
+alter table data_quality_issues add constraint data_quality_issues_review_status_check CHECK ((review_status = ANY (ARRAY['PENDING'::text, 'CORRECTED'::text, 'DISCARDED'::text])));
+
+alter table district_aliases add constraint district_aliases_pkey PRIMARY KEY (id);
+
+alter table district_aliases add constraint district_aliases_state_alias_district_key UNIQUE (state, alias_district);
+
+alter table entity_history add constraint entity_history_pkey PRIMARY KEY (id);
+
+alter table failed_pages add constraint failed_pages_pkey PRIMARY KEY (id);
+
+alter table failed_pages add constraint failed_pages_status_check CHECK ((status = ANY (ARRAY['PENDING'::text, 'RESOLVED'::text])));
+
+alter table grade_aliases add constraint grade_aliases_normalized_alias_key UNIQUE (normalized_alias);
+
+alter table grade_aliases add constraint grade_aliases_pkey PRIMARY KEY (id);
+
+alter table grade_duplicate_review_queue add constraint grade_duplicate_review_queue_pkey PRIMARY KEY (id);
+
+alter table grades add constraint grades_pkey PRIMARY KEY (id);
+
+alter table historical_jobs add constraint historical_jobs_pkey PRIMARY KEY (id);
+
+alter table historical_jobs add constraint historical_jobs_status_check CHECK ((status = ANY (ARRAY['PENDING'::text, 'RUNNING'::text, 'SUCCESS'::text, 'FAILED'::text])));
+
+alter table ingestion_batches add constraint ingestion_batches_pkey PRIMARY KEY (id);
+
+alter table ingestion_batches add constraint ingestion_batches_status_check CHECK ((status = ANY (ARRAY['RUNNING'::text, 'SUCCESS'::text, 'PARTIAL'::text, 'FAILED'::text])));
+
+alter table mandi_aliases add constraint mandi_aliases_match_method_check CHECK ((match_method = ANY (ARRAY['EXACT'::text, 'NORMALIZED'::text, 'FUZZY'::text, 'MANUAL'::text])));
+
+alter table mandi_aliases add constraint mandi_aliases_normalized_alias_key UNIQUE (normalized_alias);
+
+alter table mandi_aliases add constraint mandi_aliases_pkey PRIMARY KEY (id);
+
+alter table mandi_daily_prices add constraint mandi_daily_prices_pkey PRIMARY KEY (id);
+
+alter table mandi_daily_prices add constraint mandi_daily_prices_source_check CHECK ((source = ANY (ARRAY['manual'::text, 'resource_2'::text, 'resource_1'::text])));
+
+alter table mandi_daily_prices add constraint uq_prices_business_key_v2 UNIQUE (mandi_id, crop_id, variety, grade, price_date, source_mandi_id);
+
+alter table mandi_duplicate_review_queue add constraint mandi_duplicate_review_queue_pkey PRIMARY KEY (id);
+
+alter table mandi_location_search_cache add constraint mandi_location_search_cache_pkey PRIMARY KEY (id);
+
+alter table mandi_location_search_cache add constraint mandi_location_search_cache_provider_query_key UNIQUE (provider, query);
+
+alter table mandis add constraint mandis_location_confidence_check CHECK ((location_confidence = ANY (ARRAY['HIGH'::text, 'MEDIUM'::text, 'LOW'::text, 'REVIEW'::text])));
+
+alter table mandis add constraint mandis_merge_method_check CHECK ((merge_method = ANY (ARRAY['EXACT'::text, 'NORMALIZED'::text, 'FUZZY'::text, 'MANUAL'::text])));
+
+alter table mandis add constraint mandis_pkey PRIMARY KEY (id);
+
+alter table mandis add constraint mandis_review_status_check CHECK ((review_status = ANY (ARRAY['AUTO_CREATED'::text, 'NEEDS_REVIEW'::text, 'VERIFIED'::text, 'REJECTED'::text])));
+
+alter table mandis add constraint mandis_slug_key UNIQUE (slug);
+
+alter table mandis add constraint mandis_status_check CHECK ((status = ANY (ARRAY['ACTIVE'::text, 'MERGED'::text, 'INACTIVE'::text, 'UNKNOWN'::text])));
+
+alter table price_cache add constraint price_cache_pkey PRIMARY KEY (mandi_id, crop_id, variety, grade);
+
+alter table price_cache_refresh_state add constraint price_cache_refresh_state_id_check CHECK ((id = 1));
+
+alter table price_cache_refresh_state add constraint price_cache_refresh_state_pkey PRIMARY KEY (id);
+
+alter table quality_alerts add constraint quality_alerts_pkey PRIMARY KEY (id);
+
+alter table quality_alerts add constraint quality_alerts_severity_check CHECK ((severity = ANY (ARRAY['LOW'::text, 'MEDIUM'::text, 'HIGH'::text, 'CRITICAL'::text])));
+
+alter table quality_alerts add constraint quality_alerts_status_check CHECK ((status = ANY (ARRAY['OPEN'::text, 'ACKNOWLEDGED'::text, 'RESOLVED'::text])));
+
+alter table raw_api_batches add constraint raw_api_batches_pkey PRIMARY KEY (id);
+
+alter table raw_api_batches add constraint raw_api_batches_status_check CHECK ((status = ANY (ARRAY['RUNNING'::text, 'SUCCESS'::text, 'PARTIAL'::text, 'FAILED'::text])));
+
+alter table raw_price_entries add constraint raw_price_entries_pkey PRIMARY KEY (id);
+
+alter table suspicious_price_review add constraint suspicious_price_review_pkey PRIMARY KEY (id);
+
+alter table system_config add constraint system_config_pkey PRIMARY KEY (key);
+
+alter table varieties add constraint varieties_pkey PRIMARY KEY (id);
+
+alter table variety_aliases add constraint variety_aliases_match_method_check CHECK ((match_method = ANY (ARRAY['EXACT'::text, 'NORMALIZED'::text, 'FUZZY'::text, 'MANUAL'::text])));
+
+alter table variety_aliases add constraint variety_aliases_normalized_alias_key UNIQUE (normalized_alias);
+
+alter table variety_aliases add constraint variety_aliases_pkey PRIMARY KEY (id);
+
+alter table variety_aliases add constraint variety_aliases_variety_id_normalized_alias_key UNIQUE (variety_id, normalized_alias);
+
+alter table variety_duplicate_review_queue add constraint variety_duplicate_review_queue_pkey PRIMARY KEY (id);
+
+alter table api_call_logs add constraint api_call_logs_batch_id_fkey FOREIGN KEY (batch_id) REFERENCES ingestion_batches(id);
+
+alter table audit_events add constraint audit_events_batch_id_fkey FOREIGN KEY (batch_id) REFERENCES ingestion_batches(id);
+
+alter table coverage_reports add constraint coverage_reports_batch_id_fkey FOREIGN KEY (batch_id) REFERENCES ingestion_batches(id);
+
+alter table crop_aliases add constraint crop_aliases_crop_id_fkey FOREIGN KEY (crop_id) REFERENCES crops(id) ON DELETE CASCADE;
+
+alter table crop_duplicate_review_queue add constraint crop_duplicate_review_queue_crop_id_a_fkey FOREIGN KEY (crop_id_a) REFERENCES crops(id);
+
+alter table crop_duplicate_review_queue add constraint crop_duplicate_review_queue_crop_id_b_fkey FOREIGN KEY (crop_id_b) REFERENCES crops(id);
+
+alter table crops add constraint crops_merged_into_id_fkey FOREIGN KEY (merged_into_id) REFERENCES crops(id);
+
+alter table data_quality_issues add constraint data_quality_issues_batch_id_fkey FOREIGN KEY (batch_id) REFERENCES ingestion_batches(id);
+
+alter table entity_history add constraint entity_history_batch_id_fkey FOREIGN KEY (batch_id) REFERENCES ingestion_batches(id);
+
+alter table failed_pages add constraint failed_pages_batch_id_fkey FOREIGN KEY (batch_id) REFERENCES ingestion_batches(id);
+
+alter table grade_aliases add constraint grade_aliases_grade_id_fkey FOREIGN KEY (grade_id) REFERENCES grades(id);
+
+alter table grade_duplicate_review_queue add constraint grade_duplicate_review_queue_grade_id_a_fkey FOREIGN KEY (grade_id_a) REFERENCES grades(id);
+
+alter table grade_duplicate_review_queue add constraint grade_duplicate_review_queue_grade_id_b_fkey FOREIGN KEY (grade_id_b) REFERENCES grades(id);
+
+alter table grades add constraint grades_merged_into_id_fkey FOREIGN KEY (merged_into_id) REFERENCES grades(id);
+
+alter table grades add constraint grades_variety_id_fkey FOREIGN KEY (variety_id) REFERENCES varieties(id);
+
+alter table historical_jobs add constraint historical_jobs_compression_run_id_fkey FOREIGN KEY (compression_run_id) REFERENCES compression_runs(id);
+
+alter table mandi_aliases add constraint mandi_aliases_mandi_id_fkey FOREIGN KEY (mandi_id) REFERENCES mandis(id) ON DELETE CASCADE;
+
+alter table mandi_daily_prices add constraint mandi_daily_prices_batch_id_fkey FOREIGN KEY (batch_id) REFERENCES ingestion_batches(id);
+
+alter table mandi_daily_prices add constraint mandi_daily_prices_crop_id_fkey FOREIGN KEY (crop_id) REFERENCES crops(id);
+
+alter table mandi_daily_prices add constraint mandi_daily_prices_grade_id_fkey FOREIGN KEY (grade_id) REFERENCES grades(id);
+
+alter table mandi_daily_prices add constraint mandi_daily_prices_mandi_id_fkey FOREIGN KEY (mandi_id) REFERENCES mandis(id);
+
+alter table mandi_daily_prices add constraint mandi_daily_prices_raw_api_batch_id_fkey FOREIGN KEY (raw_api_batch_id) REFERENCES raw_api_batches(id);
+
+alter table mandi_daily_prices add constraint mandi_daily_prices_source_mandi_id_fkey FOREIGN KEY (source_mandi_id) REFERENCES mandis(id);
+
+alter table mandi_daily_prices add constraint mandi_daily_prices_variety_id_fkey FOREIGN KEY (variety_id) REFERENCES varieties(id);
+
+alter table mandi_duplicate_review_queue add constraint mandi_duplicate_review_queue_mandi_id_a_fkey FOREIGN KEY (mandi_id_a) REFERENCES mandis(id);
+
+alter table mandi_duplicate_review_queue add constraint mandi_duplicate_review_queue_mandi_id_b_fkey FOREIGN KEY (mandi_id_b) REFERENCES mandis(id);
+
+alter table mandis add constraint mandis_merged_into_id_fkey FOREIGN KEY (merged_into_id) REFERENCES mandis(id);
+
+alter table price_cache add constraint price_cache_crop_id_fkey FOREIGN KEY (crop_id) REFERENCES crops(id);
+
+alter table price_cache add constraint price_cache_grade_id_fkey FOREIGN KEY (grade_id) REFERENCES grades(id);
+
+alter table price_cache add constraint price_cache_mandi_id_fkey FOREIGN KEY (mandi_id) REFERENCES mandis(id);
+
+alter table price_cache add constraint price_cache_variety_id_fkey FOREIGN KEY (variety_id) REFERENCES varieties(id);
+
+alter table quality_alerts add constraint fk_quality_alerts_coverage_report FOREIGN KEY (coverage_report_id) REFERENCES coverage_reports(id);
+
+alter table quality_alerts add constraint quality_alerts_batch_id_fkey FOREIGN KEY (batch_id) REFERENCES ingestion_batches(id);
+
+alter table raw_price_entries add constraint raw_price_entries_first_seen_batch_id_fkey FOREIGN KEY (first_seen_batch_id) REFERENCES raw_api_batches(id);
+
+alter table raw_price_entries add constraint raw_price_entries_last_seen_batch_id_fkey FOREIGN KEY (last_seen_batch_id) REFERENCES raw_api_batches(id);
+
+alter table varieties add constraint varieties_crop_id_fkey FOREIGN KEY (crop_id) REFERENCES crops(id);
+
+alter table varieties add constraint varieties_merged_into_id_fkey FOREIGN KEY (merged_into_id) REFERENCES varieties(id);
+
+alter table variety_aliases add constraint variety_aliases_variety_id_fkey FOREIGN KEY (variety_id) REFERENCES varieties(id);
+
+alter table variety_duplicate_review_queue add constraint variety_duplicate_review_queue_variety_id_a_fkey FOREIGN KEY (variety_id_a) REFERENCES varieties(id);
+
+alter table variety_duplicate_review_queue add constraint variety_duplicate_review_queue_variety_id_b_fkey FOREIGN KEY (variety_id_b) REFERENCES varieties(id);
+
+CREATE UNIQUE INDEX coverage_reports_report_date_scope_key ON public.coverage_reports USING btree (report_date, scope);
+
+CREATE UNIQUE INDEX crops_normalized_name_active_key ON public.crops USING btree (normalized_name) WHERE (status = 'ACTIVE'::text);
+
+CREATE UNIQUE INDEX grades_variety_id_normalized_name_active_key ON public.grades USING btree (variety_id, normalized_name) WHERE (status = 'ACTIVE'::text);
+
+CREATE INDEX idx_api_call_logs_batch_id ON public.api_call_logs USING btree (batch_id);
+
+CREATE INDEX idx_api_call_logs_called_at ON public.api_call_logs USING btree (called_at);
+
+CREATE INDEX idx_api_call_logs_error_code ON public.api_call_logs USING btree (error_code);
+
+CREATE INDEX idx_api_call_logs_status ON public.api_call_logs USING btree (status);
+
+CREATE INDEX idx_audit_events_batch_id ON public.audit_events USING btree (batch_id);
+
+CREATE INDEX idx_audit_events_entity ON public.audit_events USING btree (entity_type, entity_id);
+
+CREATE INDEX idx_compression_runs_status ON public.compression_runs USING btree (status);
+
+CREATE INDEX idx_compression_runs_week_start_date ON public.compression_runs USING btree (week_start_date);
+
+CREATE INDEX idx_coverage_reports_batch_id ON public.coverage_reports USING btree (batch_id);
+
+CREATE INDEX idx_coverage_reports_report_date ON public.coverage_reports USING btree (report_date);
+
+CREATE INDEX idx_crop_aliases_crop_id ON public.crop_aliases USING btree (crop_id);
+
+CREATE INDEX idx_crops_review_status ON public.crops USING btree (review_status);
+
+CREATE INDEX idx_crops_status ON public.crops USING btree (status);
+
+CREATE INDEX idx_entity_history_batch_id ON public.entity_history USING btree (batch_id);
+
+CREATE INDEX idx_entity_history_entity ON public.entity_history USING btree (entity_type, entity_id);
+
+CREATE INDEX idx_failed_pages_batch_id ON public.failed_pages USING btree (batch_id);
+
+CREATE INDEX idx_failed_pages_status ON public.failed_pages USING btree (status);
+
+CREATE INDEX idx_grades_status ON public.grades USING btree (status);
+
+CREATE INDEX idx_grades_variety_id ON public.grades USING btree (variety_id);
+
+CREATE INDEX idx_historical_jobs_compression_run_id ON public.historical_jobs USING btree (compression_run_id);
+
+CREATE INDEX idx_historical_jobs_status ON public.historical_jobs USING btree (status);
+
+CREATE INDEX idx_ingestion_batches_job_name ON public.ingestion_batches USING btree (job_name);
+
+CREATE INDEX idx_ingestion_batches_started_at ON public.ingestion_batches USING btree (started_at);
+
+CREATE INDEX idx_ingestion_batches_status ON public.ingestion_batches USING btree (status);
+
+CREATE INDEX idx_mandi_aliases_mandi_id ON public.mandi_aliases USING btree (mandi_id);
+
+CREATE INDEX idx_mandi_daily_prices_batch_id ON public.mandi_daily_prices USING btree (batch_id);
+
+CREATE INDEX idx_mandi_daily_prices_raw_api_batch_id ON public.mandi_daily_prices USING btree (raw_api_batch_id);
+
+CREATE INDEX idx_mandis_last_seen_at ON public.mandis USING btree (last_seen_at);
+
+CREATE INDEX idx_mandis_review_status ON public.mandis USING btree (review_status);
+
+CREATE INDEX idx_mandis_status ON public.mandis USING btree (status);
+
+CREATE INDEX idx_price_cache_grade_id ON public.price_cache USING btree (grade_id);
+
+CREATE INDEX idx_price_cache_variety_id ON public.price_cache USING btree (variety_id);
+
+CREATE INDEX idx_prices_cache_lookup ON public.mandi_daily_prices USING btree (mandi_id, crop_id, COALESCE(variety, ''::text), COALESCE(grade, ''::text), price_date DESC);
+
+CREATE INDEX idx_prices_combo_latest ON public.mandi_daily_prices USING btree (mandi_id, crop_id, COALESCE(variety, ''::text), COALESCE(grade, ''::text), price_date DESC);
+
+CREATE INDEX idx_prices_date ON public.mandi_daily_prices USING btree (price_date);
+
+CREATE INDEX idx_prices_grade_id ON public.mandi_daily_prices USING btree (grade_id);
+
+CREATE INDEX idx_prices_mandi_crop ON public.mandi_daily_prices USING btree (mandi_id, crop_id);
+
+CREATE INDEX idx_prices_updated_at ON public.mandi_daily_prices USING btree (updated_at);
+
+CREATE INDEX idx_prices_variety_id ON public.mandi_daily_prices USING btree (variety_id);
+
+CREATE INDEX idx_quality_alerts_batch_id ON public.quality_alerts USING btree (batch_id);
+
+CREATE INDEX idx_quality_alerts_created_at ON public.quality_alerts USING btree (created_at);
+
+CREATE INDEX idx_quality_alerts_severity ON public.quality_alerts USING btree (severity);
+
+CREATE INDEX idx_quality_alerts_status ON public.quality_alerts USING btree (status);
+
+CREATE INDEX idx_raw_price_entries_batch ON public.raw_price_entries USING btree (first_seen_batch_id);
+
+CREATE INDEX idx_varieties_crop_id ON public.varieties USING btree (crop_id);
+
+CREATE INDEX idx_varieties_status ON public.varieties USING btree (status);
+
+CREATE UNIQUE INDEX uq_ingestion_batches_running_job ON public.ingestion_batches USING btree (job_name) WHERE (status = 'RUNNING'::text);
+
+CREATE UNIQUE INDEX uq_mandis_business_key_active ON public.mandis USING btree (normalized_name, state, district) WHERE (status = 'ACTIVE'::text);
+
+CREATE UNIQUE INDEX uq_raw_price_entries_identity ON public.raw_price_entries USING btree (resource, market, state, COALESCE(district, ''::text), commodity, COALESCE(raw_variety, ''::text), COALESCE(raw_grade, ''::text), price_date, content_hash);
+
+CREATE UNIQUE INDEX varieties_crop_id_normalized_name_active_key ON public.varieties USING btree (crop_id, normalized_name) WHERE (status = 'ACTIVE'::text);
+
+CREATE OR REPLACE FUNCTION public._crop_match_key(p_name text)
+ RETURNS text
+ LANGUAGE sql
+ IMMUTABLE
+AS $function$
+    select trim(regexp_replace(lower(p_name), '\s+', ' ', 'g'));
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public._mandi_match_key(p_name text)
+ RETURNS text
+ LANGUAGE sql
+ IMMUTABLE
+AS $function$
+    select trim(regexp_replace(
+        lower(regexp_replace(p_name, '[\(\)]', ' ', 'g')),
+        '\s*\y(apmc|mandi|market|f\s*&?\s*v|grain|sandhai|committee)\y\s*', ' ', 'g'
+    ));
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.approve_dedup_pair(p_entity_type text, p_queue_id bigint, p_survivor_id bigint, p_reason text, p_merge_method text DEFAULT 'MANUAL'::text, p_merge_confidence numeric DEFAULT 1.0)
+ RETURNS boolean
+ LANGUAGE plpgsql
+AS $function$
+declare
+  v_id_a bigint;
+  v_id_b bigint;
+  v_loser_id bigint;
+begin
+  if p_entity_type = 'mandi' then
+    select mandi_id_a, mandi_id_b into v_id_a, v_id_b from mandi_duplicate_review_queue where id = p_queue_id;
+  elsif p_entity_type = 'crop' then
+    select crop_id_a, crop_id_b into v_id_a, v_id_b from crop_duplicate_review_queue where id = p_queue_id;
+  elsif p_entity_type = 'variety' then
+    select variety_id_a, variety_id_b into v_id_a, v_id_b from variety_duplicate_review_queue where id = p_queue_id;
+  elsif p_entity_type = 'grade' then
+    select grade_id_a, grade_id_b into v_id_a, v_id_b from grade_duplicate_review_queue where id = p_queue_id;
+  else
+    raise exception 'approve_dedup_pair: unknown entity_type %', p_entity_type;
+  end if;
+
+  if v_id_a is null then
+    raise exception 'approve_dedup_pair: no % dedup queue row with id %', p_entity_type, p_queue_id;
+  end if;
+
+  if p_survivor_id = v_id_a then
+    v_loser_id := v_id_b;
+  elsif p_survivor_id = v_id_b then
+    v_loser_id := v_id_a;
+  else
+    raise exception 'approve_dedup_pair: survivor_id % is not part of queue row % (pair is %, %)', p_survivor_id, p_queue_id, v_id_a, v_id_b;
+  end if;
+
+  if p_entity_type = 'mandi' then
+    update mandi_duplicate_review_queue set resolved = true, resolution = 'merged_' || p_reason where id = p_queue_id;
+  elsif p_entity_type = 'crop' then
+    update crop_duplicate_review_queue set resolved = true, resolution = 'merged_' || p_reason where id = p_queue_id;
+  elsif p_entity_type = 'variety' then
+    update variety_duplicate_review_queue set resolved = true, resolution = 'merged_' || p_reason where id = p_queue_id;
+  elsif p_entity_type = 'grade' then
+    update grade_duplicate_review_queue set resolved = true, resolution = 'merged_' || p_reason where id = p_queue_id;
+  end if;
+
+  perform merge_entity(p_entity_type, v_loser_id, p_survivor_id, p_reason, p_merge_method, p_merge_confidence);
+
+  return true;
+end;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.current_normalization_version()
+ RETURNS integer
+ LANGUAGE sql
+ IMMUTABLE
+AS $function$ select 1; $function$
+;
+
+CREATE OR REPLACE FUNCTION public.find_or_create_crop(p_name text, p_unit text, p_source text)
+ RETURNS bigint
+ LANGUAGE plpgsql
+AS $function$
+declare
+    v_key text := _crop_match_key(p_name);
+    v_id bigint;
+    v_match_id bigint;
+    v_sim numeric;
+begin
+    select id into v_id from crops where normalized_name = v_key and status = 'ACTIVE' limit 1;
+    if v_id is not null then
+        update crops set last_seen_at = now() where id = v_id;
+        return v_id;
+    end if;
+
+    select crop_id into v_id from crop_aliases where normalized_alias = v_key and approved = true limit 1;
+    if v_id is not null then
+        update crops set last_seen_at = now() where id = v_id;
+        return v_id;
+    end if;
+
+    select c.id, similarity(c.normalized_name, v_key) into v_match_id, v_sim
+    from crops c where c.status = 'ACTIVE'
+    order by similarity(c.normalized_name, v_key) desc
+    limit 1;
+
+    if v_match_id is not null and v_sim > 0.6 then
+        insert into crop_aliases (crop_id, alias_name, normalized_alias, match_method, match_confidence, approved, source)
+        values (v_match_id, p_name, v_key, 'FUZZY', v_sim, false, p_source)
+        on conflict (normalized_alias) do nothing;
+        update crops set last_seen_at = now() where id = v_match_id;
+        return v_match_id;
+    end if;
+
+    insert into crops (name, normalized_name, unit, ingested_from)
+    values (p_name, v_key, normalize_unit(p_unit), p_source)
+    returning id into v_id;
+
+    return v_id;
+end;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.find_or_create_grade(p_variety_id bigint, p_raw_text text)
+ RETURNS bigint
+ LANGUAGE plpgsql
+AS $function$
+declare
+    v_norm text := lower(trim(p_raw_text));
+    v_id bigint;
+begin
+    if p_variety_id is null or p_raw_text is null or trim(p_raw_text) = '' then
+        return null;
+    end if;
+
+    select id into v_id from grades
+    where variety_id = p_variety_id and normalized_name = v_norm and status = 'ACTIVE';
+    if v_id is not null then return v_id; end if;
+
+    select g.grade_id into v_id from grade_aliases g
+    where g.normalized_alias = v_norm and g.approved = true
+      and g.grade_id in (select id from grades where variety_id = p_variety_id and status = 'ACTIVE');
+    if v_id is not null then return v_id; end if;
+
+    insert into grades (variety_id, name, normalized_name)
+    values (p_variety_id, p_raw_text, v_norm)
+    on conflict (variety_id, normalized_name) where status = 'ACTIVE' do update set name = excluded.name
+    returning id into v_id;
+
+    return v_id;
+end;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.find_or_create_mandi(p_name text, p_state text, p_district text, p_lat double precision, p_lng double precision, p_source text)
+ RETURNS bigint
+ LANGUAGE plpgsql
+AS $function$
+declare
+    v_key text := _mandi_match_key(p_name);
+    v_district text := normalize_district(p_state, p_district);
+    v_id bigint;
+    v_match_id bigint;
+    v_sim numeric;
+begin
+    -- 1. exact business-key match on an active mandi
+    select id into v_id from mandis
+    where normalized_name = v_key and state = p_state and district = v_district
+      and status = 'ACTIVE'
+    limit 1;
+
+    if v_id is not null then
+        update mandis set last_seen_at = now() where id = v_id;
+        return v_id;
+    end if;
+
+    -- 2. approved alias match
+    select mandi_id into v_id from mandi_aliases
+    where normalized_alias = v_key and approved = true
+    limit 1;
+
+    if v_id is not null then
+        update mandis set last_seen_at = now() where id = v_id;
+        return v_id;
+    end if;
+
+    -- 3. fuzzy match within the same district -- log an UNAPPROVED alias,
+    -- still resolve to the match so ingestion isn't blocked, but the pair
+    -- is now visible for review (never silently guessed with no trail)
+    select m.id, similarity(m.normalized_name, v_key) into v_match_id, v_sim
+    from mandis m
+    where m.state = p_state and m.district = v_district and m.status = 'ACTIVE'
+    order by similarity(m.normalized_name, v_key) desc
+    limit 1;
+
+    if v_match_id is not null and v_sim > 0.5 then
+        insert into mandi_aliases (mandi_id, alias_name, normalized_alias, match_method, match_confidence, approved, source)
+        values (v_match_id, p_name, v_key, 'FUZZY', v_sim, false, p_source)
+        on conflict (normalized_alias) do nothing;
+        update mandis set last_seen_at = now() where id = v_match_id;
+        return v_match_id;
+    end if;
+
+    -- 4. genuinely new mandi
+    insert into mandis (slug, name, normalized_name, state, district, latitude, longitude, ingested_from)
+    values (
+        v_key || '-' || substr(md5(random()::text), 1, 6),
+        p_name, v_key, p_state, v_district, p_lat, p_lng, p_source
+    )
+    returning id into v_id;
+
+    return v_id;
+end;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.find_or_create_variety(p_crop_id bigint, p_raw_text text)
+ RETURNS bigint
+ LANGUAGE plpgsql
+AS $function$
+declare
+    v_norm text := lower(trim(p_raw_text));
+    v_id bigint;
+begin
+    if p_raw_text is null or trim(p_raw_text) = '' then
+        return null;
+    end if;
+
+    select id into v_id from varieties
+    where crop_id = p_crop_id and normalized_name = v_norm and status = 'ACTIVE';
+    if v_id is not null then return v_id; end if;
+
+    select v.variety_id into v_id from variety_aliases v
+    where v.normalized_alias = v_norm and v.approved = true
+      and v.variety_id in (select id from varieties where crop_id = p_crop_id and status = 'ACTIVE');
+    if v_id is not null then return v_id; end if;
+
+    insert into varieties (crop_id, name, normalized_name)
+    values (p_crop_id, p_raw_text, v_norm)
+    on conflict (crop_id, normalized_name) where status = 'ACTIVE' do update set name = excluded.name
+    returning id into v_id;
+
+    return v_id;
+end;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.get_ops_dashboard()
+ RETURNS jsonb
+ LANGUAGE sql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+    select jsonb_build_object(
+        'generated_at', now(),
+        'avg_api_latency_ms_7d',
+            (select round(avg(duration_ms)) from api_call_logs where called_at > now() - interval '7 days'),
+        'retry_pct_7d',
+            (select case when count(*) = 0 then 0
+                    else round(100.0 * count(*) filter (where status = 'FAILURE') / count(*), 1) end
+             from api_call_logs where called_at > now() - interval '7 days'),
+        'latest_coverage',
+            (select jsonb_build_object('coverage_pct', coverage_pct, 'report_date', report_date)
+             from coverage_reports order by report_date desc, created_at desc limit 1),
+        'new_entities_7d',
+            (select (select count(*) from mandis where first_seen_at > now() - interval '7 days')
+                   + (select count(*) from crops where first_seen_at > now() - interval '7 days')),
+        'merge_candidates',
+            (select (select count(*) from mandi_duplicate_review_queue where resolved is not true)
+                   + (select count(*) from crop_duplicate_review_queue where resolved is not true)
+                   + (select count(*) from variety_duplicate_review_queue where resolved is not true)
+                   + (select count(*) from grade_duplicate_review_queue where resolved is not true)),
+        'auto_created_pct',
+            (select case when count(*) = 0 then 0
+                    else round(100.0 * count(*) filter (where last_verified_at is null) / count(*), 1) end
+             from (
+                 select last_verified_at from mandis where status = 'ACTIVE'
+                 union all
+                 select last_verified_at from crops where status = 'ACTIVE'
+             ) x),
+        'pending_reviews',
+            (select count(*) from data_quality_issues where review_status = 'PENDING'),
+        'last_live_tick',
+            (select jsonb_build_object('started_at', started_at, 'status', status, 'rows_processed', rows_processed)
+             from ingestion_batches where job_name = 'live_tick' order by started_at desc limit 1),
+        'last_daily_rewrite',
+            (select jsonb_build_object('started_at', started_at, 'status', status, 'rows_processed', rows_processed)
+             from ingestion_batches where job_name = 'daily_rewrite' order by started_at desc limit 1),
+        'rows_ingested_today',
+            (select coalesce(sum(rows_processed), 0) from ingestion_batches where started_at::date = current_date),
+        'raw_records_total',
+            (select coalesce(sum(total_records), 0) from raw_api_batches),
+        'success_pct_7d',
+            (select case when count(*) = 0 then 0
+                    else round(100.0 * count(*) filter (where status = 'SUCCESS') / count(*), 1) end
+             from ingestion_batches where started_at > now() - interval '7 days'),
+        'failure_pct_7d',
+            (select case when count(*) = 0 then 0
+                    else round(100.0 * count(*) filter (where status = 'FAILED') / count(*), 1) end
+             from ingestion_batches where started_at > now() - interval '7 days'),
+        'retry_queue_depth',
+            (select count(*) from failed_pages where status = 'PENDING'),
+        'last_compression',
+            (select jsonb_build_object('status', status, 'week_start_date', week_start_date, 'verification_hash', verification_hash)
+             from compression_runs order by created_at desc limit 1)
+    );
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.merge_entity(p_entity_type text, p_source_id bigint, p_target_id bigint, p_reason text, p_merge_method text, p_merge_confidence numeric)
+ RETURNS boolean
+ LANGUAGE plpgsql
+AS $function$
+declare
+    v_variety record;
+    v_grade record;
+    v_match_id bigint;
+    v_source_name text;
+    v_source_norm text;
+    v_queue_resolution text;
+begin
+    if p_entity_type = 'crop' then
+        if exists (select 1 from crops where id = p_source_id and status = 'MERGED') then
+            return false;
+        end if;
+
+        -- Approval gate: a crop merge must trace back to a human-resolved, approved
+        -- pairing in crop_duplicate_review_queue. Exact-name cascades from an
+        -- already-approved parent merge are exempt (deterministic, not guessed).
+        if p_merge_method is distinct from 'auto_cascade_from_crop_merge' then
+            select q.resolution into v_queue_resolution
+            from crop_duplicate_review_queue q
+            where (q.crop_id_a = p_source_id and q.crop_id_b = p_target_id)
+               or (q.crop_id_a = p_target_id and q.crop_id_b = p_source_id)
+            order by q.created_at desc limit 1;
+
+            if v_queue_resolution is null or v_queue_resolution not ilike 'merged\_%' escape '\' then
+                raise exception 'merge_entity: crop merge % -> % blocked - no approved (resolved, resolution starting merged_) entry in crop_duplicate_review_queue', p_source_id, p_target_id;
+            end if;
+        end if;
+
+        select name, normalized_name into v_source_name, v_source_norm from crops where id = p_source_id;
+
+        update crop_aliases set crop_id = p_target_id where crop_id = p_source_id;
+
+        delete from mandi_daily_prices p
+        where p.crop_id = p_source_id
+          and exists (
+              select 1 from mandi_daily_prices t
+              where t.crop_id = p_target_id and t.mandi_id = p.mandi_id
+                and t.variety = p.variety and t.grade = p.grade and t.price_date = p.price_date
+                and t.source_mandi_id is not distinct from p.source_mandi_id
+          );
+        update mandi_daily_prices set crop_id = p_target_id where crop_id = p_source_id;
+
+        update crops set status = 'MERGED', merged_into_id = p_target_id, merge_reason = p_reason,
+            merge_method = p_merge_method, merge_confidence = p_merge_confidence, merged_at = now()
+        where id = p_source_id;
+
+        insert into crop_aliases (crop_id, alias_name, normalized_alias, match_method, match_confidence, approved, source)
+        values (p_target_id, v_source_name, v_source_norm, 'MANUAL', 1.0, true, 'auto_created_on_merge')
+        on conflict (normalized_alias) do update set crop_id = p_target_id, approved = true;
+
+        insert into audit_events (entity_type, entity_id, event_type, details)
+        values ('crop', p_source_id, 'entity_merged', jsonb_build_object('target_id', p_target_id, 'reason', p_reason));
+
+        for v_variety in
+            select * from varieties where crop_id = p_source_id and status = 'ACTIVE'
+        loop
+            select id into v_match_id from varieties
+            where crop_id = p_target_id and normalized_name = v_variety.normalized_name and status = 'ACTIVE'
+            limit 1;
+
+            if v_match_id is not null then
+                perform merge_entity('variety', v_variety.id, v_match_id, p_reason,
+                                      'auto_cascade_from_crop_merge', p_merge_confidence);
+            else
+                update varieties set crop_id = p_target_id where id = v_variety.id;
+            end if;
+        end loop;
+
+        return true;
+
+    elsif p_entity_type = 'variety' then
+        if exists (select 1 from varieties where id = p_source_id and status = 'MERGED') then
+            return false;
+        end if;
+
+        if p_merge_method is distinct from 'auto_cascade_from_crop_merge' then
+            select q.resolution into v_queue_resolution
+            from variety_duplicate_review_queue q
+            where (q.variety_id_a = p_source_id and q.variety_id_b = p_target_id)
+               or (q.variety_id_a = p_target_id and q.variety_id_b = p_source_id)
+            order by q.created_at desc limit 1;
+
+            if v_queue_resolution is null or v_queue_resolution not ilike 'merged\_%' escape '\' then
+                raise exception 'merge_entity: variety merge % -> % blocked - no approved (resolved, resolution starting merged_) entry in variety_duplicate_review_queue', p_source_id, p_target_id;
+            end if;
+        end if;
+
+        select name, normalized_name into v_source_name, v_source_norm from varieties where id = p_source_id;
+
+        update variety_aliases set variety_id = p_target_id where variety_id = p_source_id;
+
+        for v_grade in
+            select * from grades where variety_id = p_source_id and status = 'ACTIVE'
+        loop
+            select id into v_match_id from grades
+            where variety_id = p_target_id and normalized_name = v_grade.normalized_name and status = 'ACTIVE'
+            limit 1;
+
+            if v_match_id is not null then
+                perform merge_entity('grade', v_grade.id, v_match_id, p_reason,
+                                      'auto_cascade_from_variety_merge', p_merge_confidence);
+            else
+                update grades set variety_id = p_target_id where id = v_grade.id;
+            end if;
+        end loop;
+
+        delete from mandi_daily_prices p
+        where p.variety_id = p_source_id
+          and exists (
+              select 1 from mandi_daily_prices t
+              where t.variety_id = p_target_id and t.mandi_id = p.mandi_id and t.crop_id = p.crop_id
+                and t.grade_id is not distinct from p.grade_id and t.price_date = p.price_date
+                and t.source_mandi_id is not distinct from p.source_mandi_id
+          );
+        update mandi_daily_prices set variety_id = p_target_id where variety_id = p_source_id;
+
+        update varieties set status = 'MERGED', merged_into_id = p_target_id, merge_reason = p_reason,
+            merge_method = p_merge_method, merge_confidence = p_merge_confidence, merged_at = now()
+        where id = p_source_id;
+
+        insert into variety_aliases (variety_id, alias_name, normalized_alias, match_method, approved)
+        values (p_target_id, v_source_name, v_source_norm, 'MANUAL', true)
+        on conflict (normalized_alias) do update set variety_id = p_target_id, approved = true;
+
+        insert into audit_events (entity_type, entity_id, event_type, details)
+        values ('variety', p_source_id, 'entity_merged', jsonb_build_object('target_id', p_target_id, 'reason', p_reason));
+
+        return true;
+
+    elsif p_entity_type = 'grade' then
+        if exists (select 1 from grades where id = p_source_id and status = 'MERGED') then
+            return false;
+        end if;
+
+        if p_merge_method is distinct from 'auto_cascade_from_variety_merge' then
+            select q.resolution into v_queue_resolution
+            from grade_duplicate_review_queue q
+            where (q.grade_id_a = p_source_id and q.grade_id_b = p_target_id)
+               or (q.grade_id_a = p_target_id and q.grade_id_b = p_source_id)
+            order by q.created_at desc limit 1;
+
+            if v_queue_resolution is null or v_queue_resolution not ilike 'merged\_%' escape '\' then
+                raise exception 'merge_entity: grade merge % -> % blocked - no approved (resolved, resolution starting merged_) entry in grade_duplicate_review_queue', p_source_id, p_target_id;
+            end if;
+        end if;
+
+        select name, normalized_name into v_source_name, v_source_norm from grades where id = p_source_id;
+
+        update grade_aliases set grade_id = p_target_id where grade_id = p_source_id;
+
+        delete from mandi_daily_prices p
+        where p.grade_id = p_source_id
+          and exists (
+              select 1 from mandi_daily_prices t
+              where t.grade_id = p_target_id and t.mandi_id = p.mandi_id and t.crop_id = p.crop_id
+                and t.variety_id is not distinct from p.variety_id and t.price_date = p.price_date
+                and t.source_mandi_id is not distinct from p.source_mandi_id
+          );
+        update mandi_daily_prices set grade_id = p_target_id where grade_id = p_source_id;
+
+        update grades set status = 'MERGED', merged_into_id = p_target_id, merge_reason = p_reason,
+            merge_method = p_merge_method, merge_confidence = p_merge_confidence, merged_at = now()
+        where id = p_source_id;
+
+        insert into grade_aliases (grade_id, alias_name, normalized_alias, match_method, match_confidence, approved, source)
+        values (p_target_id, v_source_name, v_source_norm, 'MANUAL', 1.0, true, 'auto_created_on_merge')
+        on conflict (normalized_alias) do update set grade_id = p_target_id, approved = true;
+
+        insert into audit_events (entity_type, entity_id, event_type, details)
+        values ('grade', p_source_id, 'entity_merged', jsonb_build_object('target_id', p_target_id, 'reason', p_reason));
+
+        return true;
+
+    elsif p_entity_type = 'mandi' then
+        perform union_merge_mandi(p_target_id, p_source_id, p_reason);
+        return true;
+    end if;
+
+    return false;
+end;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.normalize_district(p_state text, p_district text)
+ RETURNS text
+ LANGUAGE plpgsql
+ STABLE
+AS $function$
+declare
+    v_canonical text;
+begin
+    select canonical_district into v_canonical
+    from district_aliases
+    where state = p_state and alias_district = trim(p_district)
+    limit 1;
+    return coalesce(v_canonical, trim(p_district));
+end;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.normalize_unit(p_unit text)
+ RETURNS text
+ LANGUAGE sql
+ IMMUTABLE
+AS $function$
+    select lower(trim(coalesce(p_unit, '')));
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.refresh_price_cache()
+ RETURNS void
+ LANGUAGE plpgsql
+AS $function$
+declare
+    v_max_date date;
+begin
+    select max(price_date) into v_max_date from mandi_daily_prices;
+
+    if v_max_date is null then
+        return;
+    end if;
+
+    insert into price_cache (mandi_id, crop_id, variety, grade, variety_id, grade_id,
+                              latest_price_date, modal_price, min_price, max_price,
+                              source_mandi_name, refreshed_at)
+    select distinct on (mandi_id, crop_id, coalesce(variety,''), coalesce(grade,''))
+        mandi_id, crop_id, coalesce(variety,''), coalesce(grade,''), variety_id, grade_id,
+        price_date, modal_price, min_price, max_price, source_mandi_name, now()
+    from mandi_daily_prices
+    where price_date >= v_max_date - 10
+    order by mandi_id, crop_id, coalesce(variety,''), coalesce(grade,''), price_date desc
+    on conflict (mandi_id, crop_id, variety, grade) do update
+        set variety_id = excluded.variety_id,
+            grade_id = excluded.grade_id,
+            latest_price_date = excluded.latest_price_date,
+            modal_price = excluded.modal_price,
+            min_price = excluded.min_price,
+            max_price = excluded.max_price,
+            source_mandi_name = excluded.source_mandi_name,
+            refreshed_at = now();
+
+    update price_cache pc set
+        change_1d = pc.modal_price - prior.modal_price,
+        change_1d_pct = case when prior.modal_price > 0 then round(100.0*(pc.modal_price - prior.modal_price)/prior.modal_price, 2) end,
+        last_recomputed_at = now()
+    from (
+        select distinct on (mandi_id, crop_id, coalesce(variety,''), coalesce(grade,''))
+            mandi_id, crop_id, coalesce(variety,'') as variety, coalesce(grade,'') as grade, modal_price
+        from mandi_daily_prices p
+        where p.price_date between v_max_date - 3 and v_max_date - 1
+        order by mandi_id, crop_id, coalesce(variety,''), coalesce(grade,''), price_date desc
+    ) prior
+    where pc.mandi_id = prior.mandi_id and pc.crop_id = prior.crop_id and pc.variety = prior.variety and pc.grade = prior.grade;
+
+    update price_cache pc set
+        change_7d = pc.modal_price - prior.modal_price,
+        change_7d_pct = case when prior.modal_price > 0 then round(100.0*(pc.modal_price - prior.modal_price)/prior.modal_price, 2) end
+    from (
+        select distinct on (mandi_id, crop_id, coalesce(variety,''), coalesce(grade,''))
+            mandi_id, crop_id, coalesce(variety,'') as variety, coalesce(grade,'') as grade, modal_price
+        from mandi_daily_prices p
+        where p.price_date between v_max_date - 10 and v_max_date - 4
+        order by mandi_id, crop_id, coalesce(variety,''), coalesce(grade,''), price_date desc
+    ) prior
+    where pc.mandi_id = prior.mandi_id and pc.crop_id = prior.crop_id and pc.variety = prior.variety and pc.grade = prior.grade;
+
+    update price_cache pc set
+        change_1m = pc.modal_price - prior.modal_price,
+        change_1m_pct = case when prior.modal_price > 0 then round(100.0*(pc.modal_price - prior.modal_price)/prior.modal_price, 2) end
+    from (
+        select distinct on (mandi_id, crop_id, coalesce(variety,''), coalesce(grade,''))
+            mandi_id, crop_id, coalesce(variety,'') as variety, coalesce(grade,'') as grade, modal_price
+        from mandi_daily_prices p
+        where p.price_date between v_max_date - 35 and v_max_date - 25
+        order by mandi_id, crop_id, coalesce(variety,''), coalesce(grade,''), price_date desc
+    ) prior
+    where pc.mandi_id = prior.mandi_id and pc.crop_id = prior.crop_id and pc.variety = prior.variety and pc.grade = prior.grade;
+end;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.refresh_price_cache_batch(p_batch_size integer DEFAULT 3000)
+ RETURNS TABLE(processed_combos integer, new_watermark timestamp with time zone, remaining_estimate integer)
+ LANGUAGE plpgsql
+AS $function$
+declare
+    v_last_processed timestamptz;
+    v_batch_watermark timestamptz;
+    v_processed int;
+    v_remaining int;
+begin
+    select last_processed_at into v_last_processed
+    from price_cache_refresh_state where id = 1;
+
+    if v_last_processed is null then
+        v_last_processed := '-infinity';
+    end if;
+
+    -- Find a watermark that bounds ~p_batch_size distinct dirty combos.
+    -- Using the Nth distinct-combo's updated_at (not row count) means we
+    -- always include *every* row up to that exact timestamp, never a
+    -- partial slice of a timestamp -- correctness over exact batch size.
+    select updated_at into v_batch_watermark
+    from (
+        select distinct updated_at, mandi_id, crop_id,
+               coalesce(variety,'') as variety, coalesce(grade,'') as grade
+        from mandi_daily_prices
+        where updated_at > v_last_processed
+        order by updated_at
+    ) s
+    offset greatest(p_batch_size - 1, 0) limit 1;
+
+    if v_batch_watermark is null then
+        -- fewer than p_batch_size combos remain: this is the last batch
+        select max(updated_at) into v_batch_watermark
+        from mandi_daily_prices where updated_at > v_last_processed;
+    end if;
+
+    if v_batch_watermark is null then
+        -- nothing dirty at all
+        return query select 0, v_last_processed, 0;
+        return;
+    end if;
+
+    create temp table _dirty_combos on commit drop as
+    select distinct mandi_id, crop_id, coalesce(variety,'') as variety, coalesce(grade,'') as grade
+    from mandi_daily_prices
+    where updated_at > v_last_processed and updated_at <= v_batch_watermark;
+
+    insert into price_cache (mandi_id, crop_id, variety, grade, variety_id, grade_id,
+                              latest_price_date, modal_price, min_price, max_price,
+                              source_mandi_name, refreshed_at)
+    select d.mandi_id, d.crop_id, d.variety, d.grade,
+           latest.variety_id, latest.grade_id, latest.price_date,
+           latest.modal_price, latest.min_price, latest.max_price,
+           latest.source_mandi_name, now()
+    from _dirty_combos d
+    cross join lateral (
+        select variety_id, grade_id, price_date, modal_price, min_price, max_price, source_mandi_name
+        from mandi_daily_prices p
+        where p.mandi_id = d.mandi_id and p.crop_id = d.crop_id
+          and coalesce(p.variety,'') = d.variety and coalesce(p.grade,'') = d.grade
+        order by p.price_date desc
+        limit 1
+    ) latest
+    on conflict (mandi_id, crop_id, variety, grade) do update
+        set variety_id = excluded.variety_id,
+            grade_id = excluded.grade_id,
+            latest_price_date = excluded.latest_price_date,
+            modal_price = excluded.modal_price,
+            min_price = excluded.min_price,
+            max_price = excluded.max_price,
+            source_mandi_name = excluded.source_mandi_name,
+            refreshed_at = now();
+
+    -- stale-combo prune scoped to this batch's combos only (cheap; the
+    -- full-table anti-join version is left in refresh_price_cache() for
+    -- manual/full runs)
+    delete from price_cache pc
+    using _dirty_combos d
+    where pc.mandi_id = d.mandi_id and pc.crop_id = d.crop_id
+      and pc.variety = d.variety and pc.grade = d.grade
+      and not exists (
+          select 1 from mandi_daily_prices p
+          where p.mandi_id = pc.mandi_id and p.crop_id = pc.crop_id
+            and coalesce(p.variety,'') = pc.variety and coalesce(p.grade,'') = pc.grade
+      );
+
+    update price_cache pc set
+        change_1d = pc.modal_price - prior.modal_price,
+        change_1d_pct = case when prior.modal_price > 0 then round(100.0*(pc.modal_price - prior.modal_price)/prior.modal_price, 2) end,
+        last_recomputed_at = now()
+    from (
+        select distinct on (p.mandi_id, p.crop_id, coalesce(p.variety,''), coalesce(p.grade,''))
+            p.mandi_id, p.crop_id, coalesce(p.variety,'') as variety, coalesce(p.grade,'') as grade, p.modal_price
+        from mandi_daily_prices p
+        join _dirty_combos d on d.mandi_id = p.mandi_id and d.crop_id = p.crop_id
+            and d.variety = coalesce(p.variety,'') and d.grade = coalesce(p.grade,'')
+        where p.price_date between (select max(price_date) from mandi_daily_prices) - 3 and (select max(price_date) from mandi_daily_prices) - 1
+        order by p.mandi_id, p.crop_id, coalesce(p.variety,''), coalesce(p.grade,''), p.price_date desc
+    ) prior
+    where pc.mandi_id = prior.mandi_id and pc.crop_id = prior.crop_id and pc.variety = prior.variety and pc.grade = prior.grade;
+
+    update price_cache pc set
+        change_7d = pc.modal_price - prior.modal_price,
+        change_7d_pct = case when prior.modal_price > 0 then round(100.0*(pc.modal_price - prior.modal_price)/prior.modal_price, 2) end
+    from (
+        select distinct on (p.mandi_id, p.crop_id, coalesce(p.variety,''), coalesce(p.grade,''))
+            p.mandi_id, p.crop_id, coalesce(p.variety,'') as variety, coalesce(p.grade,'') as grade, p.modal_price
+        from mandi_daily_prices p
+        join _dirty_combos d on d.mandi_id = p.mandi_id and d.crop_id = p.crop_id
+            and d.variety = coalesce(p.variety,'') and d.grade = coalesce(p.grade,'')
+        where p.price_date between (select max(price_date) from mandi_daily_prices) - 10 and (select max(price_date) from mandi_daily_prices) - 4
+        order by p.mandi_id, p.crop_id, coalesce(p.variety,''), coalesce(p.grade,''), p.price_date desc
+    ) prior
+    where pc.mandi_id = prior.mandi_id and pc.crop_id = prior.crop_id and pc.variety = prior.variety and pc.grade = prior.grade;
+
+    update price_cache pc set
+        change_1m = pc.modal_price - prior.modal_price,
+        change_1m_pct = case when prior.modal_price > 0 then round(100.0*(pc.modal_price - prior.modal_price)/prior.modal_price, 2) end
+    from (
+        select distinct on (p.mandi_id, p.crop_id, coalesce(p.variety,''), coalesce(p.grade,''))
+            p.mandi_id, p.crop_id, coalesce(p.variety,'') as variety, coalesce(p.grade,'') as grade, p.modal_price
+        from mandi_daily_prices p
+        join _dirty_combos d on d.mandi_id = p.mandi_id and d.crop_id = p.crop_id
+            and d.variety = coalesce(p.variety,'') and d.grade = coalesce(p.grade,'')
+        where p.price_date between (select max(price_date) from mandi_daily_prices) - 35 and (select max(price_date) from mandi_daily_prices) - 25
+        order by p.mandi_id, p.crop_id, coalesce(p.variety,''), coalesce(p.grade,''), p.price_date desc
+    ) prior
+    where pc.mandi_id = prior.mandi_id and pc.crop_id = prior.crop_id and pc.variety = prior.variety and pc.grade = prior.grade;
+
+    update price_cache_refresh_state set last_processed_at = v_batch_watermark where id = 1;
+
+    select count(*) into v_processed from _dirty_combos;
+    select count(distinct (mandi_id,crop_id,coalesce(variety,''),coalesce(grade,'')))
+      into v_remaining
+      from mandi_daily_prices where updated_at > v_batch_watermark;
+
+    return query select v_processed, v_batch_watermark, v_remaining;
+end;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.reject_dedup_pair(p_entity_type text, p_queue_id bigint, p_reason text)
+ RETURNS boolean
+ LANGUAGE plpgsql
+AS $function$
+begin
+  if p_entity_type = 'mandi' then
+    update mandi_duplicate_review_queue set resolved = true, resolution = 'confirmed_separate_' || p_reason where id = p_queue_id;
+  elsif p_entity_type = 'crop' then
+    update crop_duplicate_review_queue set resolved = true, resolution = 'confirmed_separate_' || p_reason where id = p_queue_id;
+  elsif p_entity_type = 'variety' then
+    update variety_duplicate_review_queue set resolved = true, resolution = 'confirmed_separate_' || p_reason where id = p_queue_id;
+  elsif p_entity_type = 'grade' then
+    update grade_duplicate_review_queue set resolved = true, resolution = 'confirmed_separate_' || p_reason where id = p_queue_id;
+  else
+    raise exception 'reject_dedup_pair: unknown entity_type %', p_entity_type;
+  end if;
+
+  if not found then
+    raise exception 'reject_dedup_pair: no % dedup queue row with id %', p_entity_type, p_queue_id;
+  end if;
+
+  return true;
+end;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.rls_auto_enable()
+ RETURNS event_trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'pg_catalog'
+AS $function$
+DECLARE
+  cmd record;
+BEGIN
+  FOR cmd IN
+    SELECT *
+    FROM pg_event_trigger_ddl_commands()
+    WHERE command_tag IN ('CREATE TABLE', 'CREATE TABLE AS', 'SELECT INTO')
+      AND object_type IN ('table','partitioned table')
+  LOOP
+     IF cmd.schema_name IS NOT NULL AND cmd.schema_name IN ('public') AND cmd.schema_name NOT IN ('pg_catalog','information_schema') AND cmd.schema_name NOT LIKE 'pg_toast%' AND cmd.schema_name NOT LIKE 'pg_temp%' THEN
+      BEGIN
+        EXECUTE format('alter table if exists %s enable row level security', cmd.object_identity);
+        RAISE LOG 'rls_auto_enable: enabled RLS on %', cmd.object_identity;
+      EXCEPTION
+        WHEN OTHERS THEN
+          RAISE LOG 'rls_auto_enable: failed to enable RLS on %', cmd.object_identity;
+      END;
+     ELSE
+        RAISE LOG 'rls_auto_enable: skip % (either system schema or not in enforced list: %.)', cmd.object_identity, cmd.schema_name;
+     END IF;
+  END LOOP;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.rpc_version_identity()
+ RETURNS integer
+ LANGUAGE sql
+ IMMUTABLE
+AS $function$ select 1; $function$
+;
+
+CREATE OR REPLACE FUNCTION public.sweep_duplicate_crops()
+ RETURNS integer
+ LANGUAGE plpgsql
+AS $function$
+declare
+    v_count int := 0;
+begin
+    insert into crop_duplicate_review_queue (crop_id_a, crop_id_b, similarity)
+    select a.id, b.id, similarity(a.normalized_name, b.normalized_name)
+    from crops a
+    join crops b on b.id > a.id
+    where a.status = 'ACTIVE' and b.status = 'ACTIVE'
+      and similarity(a.normalized_name, b.normalized_name) > 0.5
+      and not exists (
+          select 1 from crop_duplicate_review_queue q
+          where (q.crop_id_a = a.id and q.crop_id_b = b.id) or (q.crop_id_a = b.id and q.crop_id_b = a.id)
+      );
+    get diagnostics v_count = row_count;
+    return v_count;
+end;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.sweep_duplicate_grades()
+ RETURNS integer
+ LANGUAGE plpgsql
+AS $function$
+declare
+    v_count int := 0;
+begin
+    insert into grade_duplicate_review_queue (grade_id_a, grade_id_b, similarity)
+    select a.id, b.id, similarity(a.normalized_name, b.normalized_name)
+    from grades a
+    join grades b on b.id > a.id and b.variety_id = a.variety_id
+    where a.status = 'ACTIVE' and b.status = 'ACTIVE'
+      and similarity(a.normalized_name, b.normalized_name) > 0.5
+      and not exists (
+          select 1 from grade_duplicate_review_queue q
+          where (q.grade_id_a = a.id and q.grade_id_b = b.id) or (q.grade_id_a = b.id and q.grade_id_b = a.id)
+      );
+    get diagnostics v_count = row_count;
+    return v_count;
+end;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.sweep_duplicate_mandis()
+ RETURNS integer
+ LANGUAGE plpgsql
+AS $function$
+declare
+    v_count int := 0;
+begin
+    insert into mandi_duplicate_review_queue (mandi_id_a, mandi_id_b, state, district, similarity)
+    select a.id, b.id, a.state, a.district, similarity(a.normalized_name, b.normalized_name)
+    from mandis a
+    join mandis b on b.state = a.state and b.district = a.district and b.id > a.id
+    where a.status = 'ACTIVE' and b.status = 'ACTIVE'
+      and similarity(a.normalized_name, b.normalized_name) > 0.4
+      and not exists (
+          select 1 from mandi_duplicate_review_queue q
+          where (q.mandi_id_a = a.id and q.mandi_id_b = b.id) or (q.mandi_id_a = b.id and q.mandi_id_b = a.id)
+      );
+    get diagnostics v_count = row_count;
+    return v_count;
+end;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.sweep_duplicate_varieties()
+ RETURNS integer
+ LANGUAGE plpgsql
+AS $function$
+declare
+    v_count int := 0;
+begin
+    insert into variety_duplicate_review_queue (variety_id_a, variety_id_b, similarity)
+    select a.id, b.id, similarity(a.normalized_name, b.normalized_name)
+    from varieties a
+    join varieties b on b.id > a.id and b.crop_id = a.crop_id
+    where a.status = 'ACTIVE' and b.status = 'ACTIVE'
+      and similarity(a.normalized_name, b.normalized_name) > 0.5
+      and not exists (
+          select 1 from variety_duplicate_review_queue q
+          where (q.variety_id_a = a.id and q.variety_id_b = b.id) or (q.variety_id_a = b.id and q.variety_id_b = a.id)
+      );
+    get diagnostics v_count = row_count;
+    return v_count;
+end;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.trg_raw_price_entries_no_delete_fn()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+begin
+    raise exception 'raw_price_entries rows are immutable -- delete is not permitted';
+end;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.trg_raw_price_entries_no_edit_fn()
+ RETURNS trigger
+ LANGUAGE plpgsql
+AS $function$
+begin
+    if new.payload is distinct from old.payload
+       or new.content_hash is distinct from old.content_hash
+       or new.first_seen_batch_id is distinct from old.first_seen_batch_id
+       or new.first_seen_at is distinct from old.first_seen_at then
+        raise exception 'raw_price_entries: only last_seen_batch_id/last_seen_at may be updated';
+    end if;
+    return new;
+end;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.union_merge_mandi(p_survivor_id bigint, p_loser_id bigint, p_reason text DEFAULT 'apmc_fv_union_merge'::text)
+ RETURNS TABLE(deduped_identical bigint, kept_both_differing bigint, moved_no_collision bigint)
+ LANGUAGE plpgsql
+ SET search_path TO 'public'
+AS $function$
+DECLARE
+  v_deduped bigint := 0;
+  v_kept_both bigint := 0;
+  v_moved bigint := 0;
+  v_loser_name text;
+  v_loser_norm text;
+BEGIN
+  SELECT name, normalized_name INTO v_loser_name, v_loser_norm FROM mandis WHERE id = p_loser_id;
+
+  UPDATE mandi_daily_prices SET source_mandi_id = mandi_id, source_mandi_name = (SELECT name FROM mandis WHERE id = mandi_id)
+  WHERE mandi_id IN (p_survivor_id, p_loser_id) AND source_mandi_id IS NULL;
+
+  WITH dupes AS (
+    SELECT l.id AS loser_row_id
+    FROM mandi_daily_prices l
+    JOIN mandi_daily_prices s
+      ON s.mandi_id = p_survivor_id AND l.mandi_id = p_loser_id
+     AND s.crop_id = l.crop_id AND s.variety = l.variety AND s.grade = l.grade AND s.price_date = l.price_date
+     AND s.modal_price IS NOT DISTINCT FROM l.modal_price
+     AND s.min_price IS NOT DISTINCT FROM l.min_price
+     AND s.max_price IS NOT DISTINCT FROM l.max_price
+  )
+  DELETE FROM mandi_daily_prices WHERE id IN (SELECT loser_row_id FROM dupes);
+  GET DIAGNOSTICS v_deduped = ROW_COUNT;
+
+  SELECT count(*) INTO v_kept_both
+  FROM mandi_daily_prices l
+  JOIN mandi_daily_prices s
+    ON s.mandi_id = p_survivor_id AND l.mandi_id = p_loser_id
+   AND s.crop_id = l.crop_id AND s.variety = l.variety AND s.grade = l.grade AND s.price_date = l.price_date;
+
+  UPDATE mandi_daily_prices SET mandi_id = p_survivor_id, updated_at = now() WHERE mandi_id = p_loser_id;
+  GET DIAGNOSTICS v_moved = ROW_COUNT;
+
+  UPDATE mandis SET status = 'MERGED', merged_into_id = p_survivor_id, merge_reason = p_reason, merged_at = now()
+  WHERE id = p_loser_id;
+
+  UPDATE mandi_aliases SET mandi_id = p_survivor_id WHERE mandi_id = p_loser_id;
+
+  INSERT INTO mandi_aliases (mandi_id, alias_name, normalized_alias, match_method, match_confidence, approved, source)
+  VALUES (p_survivor_id, v_loser_name, v_loser_norm, 'MANUAL', 1.0, true, 'auto_created_on_merge')
+  ON CONFLICT (normalized_alias) DO UPDATE SET mandi_id = p_survivor_id, approved = true;
+
+  RETURN QUERY SELECT v_deduped, v_kept_both, v_moved;
+END;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.update_mandi_location(p_mandi_id bigint, p_latitude double precision, p_longitude double precision, p_location_confidence text, p_source text, p_matched_place text DEFAULT NULL::text)
+ RETURNS boolean
+ LANGUAGE plpgsql
+AS $function$
+declare
+    v_status text;
+    v_old_confidence text;
+    v_old_latitude double precision;
+    v_old_longitude double precision;
+    v_confidence_rank constant jsonb := '{
+        "REVIEW": 0, "LOW": 1, "MEDIUM": 2, "HIGH": 3
+    }'::jsonb;
+begin
+    select status, location_confidence, latitude, longitude
+    into v_status, v_old_confidence, v_old_latitude, v_old_longitude
+    from mandis
+    where id = p_mandi_id
+    for update;
+
+    if not found then
+        return false;
+    end if;
+
+    if v_status <> 'ACTIVE' then
+        return false;
+    end if;
+
+    if v_old_confidence is not null
+       and coalesce((v_confidence_rank -> v_old_confidence)::int, 0)
+           > coalesce((v_confidence_rank -> p_location_confidence)::int, 0)
+    then
+        return false;
+    end if;
+
+    update mandis
+    set latitude = p_latitude,
+        longitude = p_longitude,
+        location_confidence = p_location_confidence,
+        location_matched_place = p_matched_place,
+        last_verified_at = now()
+    where id = p_mandi_id;
+
+    insert into audit_events (entity_type, entity_id, event_type, details)
+    values (
+        'mandi',
+        p_mandi_id,
+        'location_geocoded',
+        jsonb_build_object(
+            'old_latitude', v_old_latitude,
+            'old_longitude', v_old_longitude,
+            'old_confidence', v_old_confidence,
+            'new_latitude', p_latitude,
+            'new_longitude', p_longitude,
+            'new_confidence', p_location_confidence,
+            'matched_place', p_matched_place,
+            'source', p_source
+        )
+    );
+
+    return true;
+end;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.upsert_raw_price_entries_batch(p_entries jsonb)
+ RETURNS TABLE(entry_id bigint, is_new boolean)
+ LANGUAGE plpgsql
+AS $function$
+begin
+    return query
+    insert into raw_price_entries (
+        resource, market, state, district, commodity, raw_variety, raw_grade, price_date,
+        content_hash, payload, parser_version, first_seen_batch_id, last_seen_batch_id
+    )
+    select
+        e->>'resource', e->>'market', e->>'state', e->>'district', e->>'commodity',
+        e->>'raw_variety', e->>'grade', (e->>'price_date')::date,
+        e->>'content_hash', e->'payload', (e->>'parser_version')::int,
+        e->>'batch_id', e->>'batch_id'
+    from jsonb_array_elements(p_entries) as e
+    on conflict (resource, market, state, coalesce(district,''), commodity, coalesce(raw_variety,''), coalesce(raw_grade,''), price_date, content_hash)
+    do update set last_seen_batch_id = excluded.last_seen_batch_id, last_seen_at = now()
+    returning raw_price_entries.id, (xmax = 0);
+end;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.upsert_raw_price_entry(p_resource text, p_market text, p_state text, p_district text, p_commodity text, p_raw_variety text, p_raw_grade text, p_price_date date, p_content_hash text, p_payload jsonb, p_batch_id text, p_parser_version integer)
+ RETURNS TABLE(entry_id bigint, is_new boolean)
+ LANGUAGE plpgsql
+AS $function$
+declare
+    v_id bigint;
+    v_is_new boolean;
+begin
+    insert into raw_price_entries (
+        resource, market, state, district, commodity, raw_variety, raw_grade, price_date,
+        content_hash, payload, parser_version, first_seen_batch_id, last_seen_batch_id
+    ) values (
+        p_resource, p_market, p_state, p_district, p_commodity, p_raw_variety, p_raw_grade, p_price_date,
+        p_content_hash, p_payload, p_parser_version, p_batch_id, p_batch_id
+    )
+    on conflict (resource, market, state, coalesce(district,''), commodity, coalesce(raw_variety,''), coalesce(raw_grade,''), price_date, content_hash)
+    do update set last_seen_batch_id = p_batch_id, last_seen_at = now()
+    returning raw_price_entries.id, (xmax = 0) into v_id, v_is_new;
+
+    return query select v_id, v_is_new;
+end;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.verify_merge_integrity()
+ RETURNS TABLE(issue text, entity_id bigint, detail text)
+ LANGUAGE sql
+ STABLE
+AS $function$
+    select 'price row on MERGED mandi', p.mandi_id, 'mandi_daily_prices.id=' || p.id
+    from mandi_daily_prices p join mandis m on m.id = p.mandi_id where m.status = 'MERGED'
+    union all
+    select 'price row on MERGED crop', p.crop_id, 'mandi_daily_prices.id=' || p.id
+    from mandi_daily_prices p join crops c on c.id = p.crop_id where c.status = 'MERGED';
+$function$
+;
+
+create or replace view public.v_audit_business_key_constraint as
+ SELECT (EXISTS ( SELECT 1
+           FROM pg_constraint
+          WHERE pg_constraint.conname = 'uq_prices_business_key_v2'::name AND pg_constraint.contype = 'u'::"char")) AS constraint_present;
+
+create or replace view public.v_audit_coordinate_mismatch as
+ SELECT a.id AS mandi_id,
+    a.name AS mandi_name,
+    b.id AS conflicting_mandi_id,
+    b.name AS conflicting_mandi_name,
+    a.latitude,
+    a.longitude,
+    similarity(a.normalized_name, b.normalized_name) AS name_similarity
+   FROM mandis a
+     JOIN mandis b ON b.id > a.id AND b.latitude = a.latitude AND b.longitude = a.longitude
+  WHERE a.status = 'ACTIVE'::text AND b.status = 'ACTIVE'::text AND a.latitude IS NOT NULL AND a.longitude IS NOT NULL AND similarity(a.normalized_name, b.normalized_name) < 0.3::double precision;
+
+create or replace view public.v_audit_duplicate_price_keys as
+ SELECT mandi_id,
+    crop_id,
+    variety,
+    grade,
+    price_date,
+    source_mandi_id,
+    count(*) AS row_count
+   FROM mandi_daily_prices
+  GROUP BY mandi_id, crop_id, variety, grade, price_date, source_mandi_id
+ HAVING count(*) > 1;
+
+create or replace view public.v_audit_ghost_crops as
+ SELECT id,
+    normalized_name
+   FROM crops c
+  WHERE status = 'ACTIVE'::text AND NOT (EXISTS ( SELECT 1
+           FROM mandi_daily_prices p
+          WHERE p.crop_id = c.id));
+
+create or replace view public.v_audit_ghost_mandis as
+ SELECT id,
+    normalized_name,
+    state
+   FROM mandis m
+  WHERE status = 'ACTIVE'::text AND NOT (EXISTS ( SELECT 1
+           FROM mandi_daily_prices p
+          WHERE p.mandi_id = m.id));
+
+create or replace view public.v_audit_present_price_dates as
+ SELECT DISTINCT price_date
+   FROM mandi_daily_prices
+  ORDER BY price_date;
+
+create or replace view public.v_audit_price_date_bounds as
+ SELECT min(price_date) AS min_date,
+    max(price_date) AS max_date,
+    count(DISTINCT price_date) AS distinct_dates
+   FROM mandi_daily_prices;
+
+CREATE TRIGGER trg_raw_price_entries_no_delete BEFORE DELETE ON public.raw_price_entries FOR EACH ROW EXECUTE FUNCTION trg_raw_price_entries_no_delete_fn();
+
+CREATE TRIGGER trg_raw_price_entries_no_edit BEFORE UPDATE ON public.raw_price_entries FOR EACH ROW EXECUTE FUNCTION trg_raw_price_entries_no_edit_fn();
+
+alter table public.api_call_logs enable row level security;
+
+alter table public.audit_events enable row level security;
+
+alter table public.compression_runs enable row level security;
+
+alter table public.coverage_reports enable row level security;
+
+alter table public.crop_aliases enable row level security;
+
+alter table public.crop_duplicate_review_queue enable row level security;
+
+alter table public.crops enable row level security;
+
+alter table public.data_quality_issues enable row level security;
+
+alter table public.district_aliases enable row level security;
+
+alter table public.entity_history enable row level security;
+
+alter table public.failed_pages enable row level security;
+
+alter table public.grade_aliases enable row level security;
+
+alter table public.grade_duplicate_review_queue enable row level security;
+
+alter table public.grades enable row level security;
+
+alter table public.historical_jobs enable row level security;
+
+alter table public.ingestion_batches enable row level security;
+
+alter table public.mandi_aliases enable row level security;
+
+alter table public.mandi_daily_prices enable row level security;
+
+alter table public.mandi_duplicate_review_queue enable row level security;
+
+alter table public.mandi_location_search_cache enable row level security;
+
+alter table public.mandis enable row level security;
+
+alter table public.price_cache enable row level security;
+
+alter table public.price_cache_refresh_state enable row level security;
+
+alter table public.quality_alerts enable row level security;
+
+alter table public.raw_api_batches enable row level security;
+
+alter table public.raw_price_entries enable row level security;
+
+alter table public.suspicious_price_review enable row level security;
+
+alter table public.system_config enable row level security;
+
+alter table public.varieties enable row level security;
+
+alter table public.variety_aliases enable row level security;
+
+alter table public.variety_duplicate_review_queue enable row level security;
+
+grant usage on schema public to service_role;
+
+grant all privileges on all tables in schema public to service_role;
+
+grant all privileges on all sequences in schema public to service_role;
+
+grant execute on all functions in schema public to service_role;
+
+insert into public.system_config (key, value) values ('API_BASE_RESOURCE_1', 'https://api.data.gov.in/resource/9ef84268-d588-465a-a308-a864a43d0070'), ('API_BASE_RESOURCE_2', 'https://api.data.gov.in/resource/35985678-0d79-46b4-9ed6-6f13308a1d24'), ('API_TIMEOUT', '75'), ('BATCH_SIZE', '500'), ('FUZZY_THRESHOLD', '0.5'), ('MAX_RETRIES', '3'), ('MERGE_THRESHOLD', '0.8'), ('PAGE_SIZE', '500'), ('QUALITY_THRESHOLD', '0.5'), ('RETRY_DELAY', '5') on conflict (key) do nothing;

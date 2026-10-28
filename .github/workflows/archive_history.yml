@@ -6,7 +6,7 @@ name: archive_history
 # run just continues. Does nothing until the MANDI_R2_* secrets exist.
 on:
   schedule:
-    - cron: "20 */6 * * *" # a run loops windows for ~5h (a window takes ~2h), so every 6h keeps it going without queueing
+    - cron: "20 */3 * * *" # one window per run (about 40 min); every 3h gives 8 runs a day
   workflow_dispatch:
     inputs:
       max_windows:
@@ -45,6 +45,6 @@ jobs:
           MANDI_R2_SECRET_ACCESS_KEY: ${{ secrets.MANDI_R2_SECRET_ACCESS_KEY }}
           MANDI_R2_BUCKET: ${{ secrets.MANDI_R2_BUCKET }}
         run: |
-          args="--budget-minutes 300"
+          args="--budget-minutes 300 --max-windows 1"
           if [ -n "${{ github.event.inputs.max_windows }}" ]; then args="$args --max-windows ${{ github.event.inputs.max_windows }}"; fi
           python -m farmuncle_pipeline.ingestion.archive_history $args

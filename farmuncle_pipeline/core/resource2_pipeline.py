@@ -58,8 +58,16 @@ from farmuncle_pipeline.core.batch_lifecycle import (
     start_raw_batch,
 )
 from farmuncle_pipeline.core.api_params import build_params
+from farmuncle_pipeline.core.outage import (
+    OutageBreaker,
+    alert_feed_outage,
+    alert_quarantine_flood,
+    quarantine_flood,
+)
 from farmuncle_pipeline.core.state_coverage import (
     alert_state_coverage_gap,
+    coverage_is_confirmed,
+    resolve_state_coverage_alerts,
     fetch_nationwide_total,
     gap_size,
 )
@@ -174,7 +182,12 @@ def _fetch_all_resource_2_pages(
     total_pages = 0
     covered_total = 0
 
+    breaker = OutageBreaker()
+
     for state in QUERY_STATES:
+        if breaker.tripped:  # the feed stopped answering: don't grind through the remaining states
+            all_states_complete = False
+            break
         offset = 0
         page_in_state = 0
         state_had_success = False
@@ -213,6 +226,7 @@ def _fetch_all_resource_2_pages(
                 error_code=None if result.ok else "INGEST-001",
             )
 
+            breaker.record(result.ok, result.error)
             if not result.ok:
                 insert_failed_page(
                     supabase,
@@ -304,6 +318,14 @@ def _fetch_all_resource_2_pages(
             gap=gap,
             nationwide_total=nationwide_total,
             covered_total=covered_total,
+        )
+        all_states_complete = False
+    elif coverage_is_confirmed(nationwide_total=nationwide_total, gap=gap, breaker_tripped=breaker.tripped):
+        resolve_state_coverage_alerts(supabase, resource=Resource.RESOURCE_2, date_str=date_str)
+
+    if breaker.tripped:
+        alert_feed_outage(
+            supabase, batch_id=batch_id, resource=Resource.RESOURCE_2, failures=breaker.consecutive, last_error=breaker.last_error
         )
         all_states_complete = False
 
@@ -413,11 +435,17 @@ def ingest_resource2_for_date(ctx, *, target_date: date, job_name: str) -> Pipel
             resource=Resource.RESOURCE_2,
         )
         rows_quarantined = upsert_result.rows_quarantined
+        flood = quarantine_flood(rows=len(price_rows) + rows_quarantined, quarantined=rows_quarantined)
+        if flood:
+            alert_quarantine_flood(
+                supabase, batch_id=batch.id, resource=Resource.RESOURCE_2,
+                rows=len(price_rows) + rows_quarantined, quarantined=rows_quarantined,
+            )
         upsert_seconds = time.monotonic() - _upsert_start
 
         if total_outage:
             final_status = IngestionBatchStatus.FAILED
-        elif (not all_states_complete) or rows_failed > 0 or rows_quarantined > 0:
+        elif (not all_states_complete) or rows_failed > 0 or flood:  # quarantined junk is normal; only a flood is a problem
             final_status = IngestionBatchStatus.PARTIAL
         else:
             final_status = IngestionBatchStatus.SUCCESS

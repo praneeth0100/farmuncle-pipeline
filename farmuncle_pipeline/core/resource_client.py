@@ -80,7 +80,7 @@ def _redact(text: str) -> str:
     return re.sub(r"(api[-_]key=)[^&\s'\"]+", lambda m: m.group(1) + "***", text, flags=re.I)
 
 
-def fetch_page(
+def _fetch_one(
     *,
     url: str,
     params: dict,
@@ -154,6 +154,48 @@ def fetch_page(
         ok=False, records=[], raw_response={},
         error=_redact(last_error) if last_error else last_error, duration_ms=duration_ms
     )
+
+
+_PRIMARY_PREFIX = "https://www.data.gov.in/backend/dataapi/v1/resource/"
+_LEGACY_PREFIX = "https://api.data.gov.in/resource/"
+_swapped = False  # True once the other host answered when the first one did not
+
+
+def alternate_url(url: str) -> str | None:
+    """The same resource on the other known data.gov.in host, or None for any other URL."""
+    if url.startswith(_PRIMARY_PREFIX):
+        return _LEGACY_PREFIX + url[len(_PRIMARY_PREFIX):]
+    if url.startswith(_LEGACY_PREFIX):
+        return _PRIMARY_PREFIX + url[len(_LEGACY_PREFIX):]
+    return None
+
+
+def _is_connection_failure(error: str | None) -> bool:
+    """Timeouts and refused connections, not HTTP status errors (a 403/429 is the same on both hosts)."""
+    if not error:
+        return False
+    return error.startswith("timeout:") or (error.startswith("request error:") and not re.match(r"request error: \d{3}\b", error))
+
+
+def fetch_page(*, url: str, params: dict, headers: dict, timeout: int, max_retries: int, retry_delay_seconds: int) -> PageFetchResult:
+    """`_fetch_one`, plus one try on the other data.gov.in host when the first is unreachable.
+
+    The www.data.gov.in/backend path is what the website itself uses and is not documented; the old
+    api.data.gov.in host refuses some networks. Whichever answers is remembered for later calls.
+    """
+    global _swapped
+    alt = alternate_url(url)
+    first = alt if (_swapped and alt) else url
+    second = url if (_swapped and alt) else alt
+    kwargs = dict(params=params, headers=headers, timeout=timeout)
+    result = _fetch_one(url=first, max_retries=max_retries, retry_delay_seconds=retry_delay_seconds, **kwargs)
+    if result.ok or second is None or not _is_connection_failure(result.error):
+        return result
+    fallback = _fetch_one(url=second, max_retries=0, retry_delay_seconds=0, **kwargs)
+    if fallback.ok:
+        _swapped = not _swapped
+        return fallback
+    return result
 
 
 # =============================================================================

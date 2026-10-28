@@ -116,8 +116,17 @@ from farmuncle_pipeline.core.batch_lifecycle import (
     start_raw_batch,
 )
 from farmuncle_pipeline.core.api_params import build_params
+from farmuncle_pipeline.core.outage import (
+    OutageBreaker,
+    alert_empty_feed,
+    alert_feed_outage,
+    alert_quarantine_flood,
+    quarantine_flood,
+)
 from farmuncle_pipeline.core.state_coverage import (
     alert_state_coverage_gap,
+    coverage_is_confirmed,
+    resolve_state_coverage_alerts,
     fetch_nationwide_total,
     gap_size,
 )
@@ -214,7 +223,12 @@ def _fetch_all_resource_1_pages(
     states_with_any_success = 0
     covered_total = 0
 
+    breaker = OutageBreaker()
+
     for state in QUERY_STATES:
+        if breaker.tripped:  # the feed stopped answering: don't grind through the remaining states
+            all_states_complete = False
+            break
         offset = 0
         page_in_state = 0
         state_record_count = 0
@@ -257,6 +271,7 @@ def _fetch_all_resource_1_pages(
                 error_code=None if result.ok else "INGEST-001",
             )
 
+            breaker.record(result.ok, result.error)
             if not result.ok:
                 # This is the §9 fix in effect: an exhausted-retries page
                 # is recorded explicitly (INGEST-002: pagination failure)
@@ -353,6 +368,14 @@ def _fetch_all_resource_1_pages(
             covered_total=covered_total,
         )
         all_states_complete = False
+    elif coverage_is_confirmed(nationwide_total=nationwide_total, gap=gap, breaker_tripped=breaker.tripped):
+        resolve_state_coverage_alerts(supabase, resource=Resource.RESOURCE_1, date_str=date_str)
+
+    if breaker.tripped:
+        alert_feed_outage(
+            supabase, batch_id=batch_id, resource=Resource.RESOURCE_1, failures=breaker.consecutive, last_error=breaker.last_error
+        )
+        all_states_complete = False
 
     return records, all_states_complete, total_pages, states_with_any_success
 
@@ -444,6 +467,8 @@ def run_live_tick(ctx) -> None:
             api_key=ctx.secrets.data_gov_api_key,
             runtime=runtime,
         )
+        if not records and pagination_complete and datetime.now(_IST).hour >= 11:
+            alert_empty_feed(supabase, batch_id=batch.id, resource=Resource.RESOURCE_1, date_str=date_str)
 
         result = process_records(
             records,
@@ -474,8 +499,14 @@ def run_live_tick(ctx) -> None:
             resource=Resource.RESOURCE_1,
         )
         rows_quarantined = upsert_result.rows_quarantined
+        flood = quarantine_flood(rows=len(price_rows) + rows_quarantined, quarantined=rows_quarantined)
+        if flood:
+            alert_quarantine_flood(
+                supabase, batch_id=batch.id, resource=Resource.RESOURCE_1,
+                rows=len(price_rows) + rows_quarantined, quarantined=rows_quarantined,
+            )
 
-        is_partial = (not pagination_complete) or rows_failed > 0 or rows_quarantined > 0
+        is_partial = (not pagination_complete) or rows_failed > 0 or flood  # junk prices are quarantined every day; only a flood is a problem
         final_status = IngestionBatchStatus.PARTIAL if is_partial else IngestionBatchStatus.SUCCESS
 
         # precedence_skipped is deliberately NOT part of is_partial — a

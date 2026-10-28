@@ -408,3 +408,19 @@ def test_upsert_raw_price_entries_batch_single_rpc_call_regardless_of_page_size(
     # round-trip per page, not one per record.
     assert len(client.rpc_calls) == 1
     assert len(client.rpc_calls[0][1]["p_entries"]) == 5
+
+
+def test_upsert_raw_price_entries_batch_sends_a_record_repeated_in_one_page_only_once():
+    # The same government record twice in one page made the whole INSERT ... ON CONFLICT DO UPDATE
+    # fail ("cannot affect row a second time") and lost the day. One copy per identity goes out.
+    client = FakeRawDedupClient(rpc_response=[{"entry_id": 1, "is_new": True}])
+    same = _make_parsed()
+    other = _make_parsed(commodity="Tomato")
+
+    upsert_raw_price_entries_batch(
+        client, resource="resource_2", batch_id="batch-1", parser_version=3,
+        parsed_records=[same, dict(same), other],
+    )
+
+    _, params = client.rpc_calls[0]
+    assert [e["commodity"] for e in params["p_entries"]] == ["Onion", "Tomato"]

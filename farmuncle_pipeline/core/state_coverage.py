@@ -103,3 +103,20 @@ def alert_state_coverage_gap(
     except Exception as exc:
         raise ConfigError(f"Failed to write state-coverage quality_alerts row: {exc}") from exc
     return True
+
+
+def coverage_is_confirmed(*, nationwide_total, gap: int, breaker_tripped: bool) -> bool:
+    """True only when the nationwide check actually ran, found no gap, and the feed was answering.
+    An unknown result (the check failed) must never clear an open alert."""
+    return nationwide_total is not None and gap == 0 and not breaker_tripped
+
+
+def resolve_state_coverage_alerts(supabase, *, resource: Resource, date_str: str) -> None:
+    """A later run that reconciles clears the alert for that day (early in the day the feed is still loading)."""
+    prefix = f"State coverage gap for {resource.value} on {date_str}"
+    try:
+        supabase.table("quality_alerts").update({"status": "RESOLVED"}).eq("status", "OPEN").eq(
+            "error_code", ERROR_CODE
+        ).like("message", prefix + "%").execute()
+    except Exception as exc:  # housekeeping only; never fail a run over it
+        print(f"[state_coverage] could not resolve earlier alert: {exc}")

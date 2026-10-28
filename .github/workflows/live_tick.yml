@@ -1,10 +1,10 @@
 name: live_tick
 
-# Resource 1, today-only, every 3h (Master Build Spec §9/§21 Step 14).
+# Resource 1, today-only, hourly (Master Build Spec §9/§21 Step 14).
 on:
   schedule:
-    # UTC. Every 3 hours on the hour: 00:00, 03:00, 06:00, 09:00, 12:00, 15:00, 18:00, 21:00.
-    - cron: "0 */3 * * *"
+    # UTC. Hourly at :05 (off the top of the hour, when GitHub schedules are busiest).
+    - cron: "5 * * * *"
   workflow_dispatch: {} # manual trigger, for testing/ops
 
 concurrency:

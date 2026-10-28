@@ -114,3 +114,20 @@ def test_preload_loads_crop_medians_and_survives_failure():
     ok.preload()
     assert ok.crop_medians == {10: 40.5}
     assert _make_identity(mandis=[_KNOWN_MANDI], crops=[_KNOWN_CROP]).crop_medians == {}
+
+
+# --- too high: a price 100x above the crop elsewhere is divided back -----------------------------
+
+def test_a_price_100_times_too_high_is_divided_by_100():
+    assert peer_scale(4000.0, 3500.0, 4500.0, median=40.0) == (0.01, 40.0, 35.0, 45.0)
+
+
+def test_a_merely_expensive_price_is_left_alone():
+    assert peer_scale(80.0, 70.0, 90.0, median=40.0) is None      # 2x
+    assert peer_scale(400.0, 350.0, 450.0, median=40.0) is None   # 10x: /100 = 4, no match
+
+
+def test_too_high_end_to_end():
+    row = _process(_identity({10: 40.0}), modal_price="400000", min_price="350000", max_price="450000")
+    assert (row["modal_price"], row["min_price"], row["max_price"]) == (40.0, 35.0, 45.0)
+    assert row["quality_components"]["peer_scaled"] == 0.01

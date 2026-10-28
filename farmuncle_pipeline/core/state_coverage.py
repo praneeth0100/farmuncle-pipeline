@@ -103,3 +103,14 @@ def alert_state_coverage_gap(
     except Exception as exc:
         raise ConfigError(f"Failed to write state-coverage quality_alerts row: {exc}") from exc
     return True
+
+
+def resolve_state_coverage_alerts(supabase, *, resource: Resource, date_str: str) -> None:
+    """A later run that reconciles clears the alert for that day (early in the day the feed is still loading)."""
+    prefix = f"State coverage gap for {resource.value} on {date_str}"
+    try:
+        supabase.table("quality_alerts").update({"status": "RESOLVED"}).eq("status", "OPEN").eq(
+            "error_code", ERROR_CODE
+        ).like("message", prefix + "%").execute()
+    except Exception as exc:  # housekeeping only; never fail a run over it
+        print(f"[state_coverage] could not resolve earlier alert: {exc}")

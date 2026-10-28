@@ -160,3 +160,34 @@ def test_empty_feed_alert():
     db = _AlertDb()
     assert alert_empty_feed(db, batch_id="b", resource=Resource.RESOURCE_1, date_str="29-10-2026")
     assert db.inserted[0]["error_code"] == "QUALITY-004"
+
+
+def test_a_clean_run_resolves_the_open_coverage_alert_for_that_day():
+    from farmuncle_pipeline.core.state_coverage import resolve_state_coverage_alerts
+
+    calls = []
+
+    class _Db:
+        def table(self, name):
+            calls.append(("table", name))
+            return self
+
+        def update(self, payload):
+            calls.append(("update", payload))
+            return self
+
+        def eq(self, col, val):
+            calls.append(("eq", col, val))
+            return self
+
+        def like(self, col, val):
+            calls.append(("like", col, val))
+            return self
+
+        def execute(self):
+            return FakeResponse(data=[])
+
+    resolve_state_coverage_alerts(_Db(), resource=Resource.RESOURCE_1, date_str="29/10/2026")
+    assert ("update", {"status": "RESOLVED"}) in calls
+    assert ("eq", "status", "OPEN") in calls and ("eq", "error_code", "QUALITY-002") in calls
+    assert any(c[0] == "like" and "resource_1 on 29/10/2026" in c[2] for c in calls)

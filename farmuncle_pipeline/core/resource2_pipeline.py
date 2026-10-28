@@ -66,6 +66,7 @@ from farmuncle_pipeline.core.outage import (
 )
 from farmuncle_pipeline.core.state_coverage import (
     alert_state_coverage_gap,
+    resolve_state_coverage_alerts,
     fetch_nationwide_total,
     gap_size,
 )
@@ -318,6 +319,8 @@ def _fetch_all_resource_2_pages(
             covered_total=covered_total,
         )
         all_states_complete = False
+    else:
+        resolve_state_coverage_alerts(supabase, resource=Resource.RESOURCE_2, date_str=date_str)
 
     if breaker.tripped:
         alert_feed_outage(

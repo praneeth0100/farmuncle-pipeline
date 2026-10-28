@@ -43,11 +43,13 @@ def run_backward(
     """Process windows until `oldest`, the window cap or the time budget. Returns windows completed."""
     began = clock()
     done_count = 0
+    longest = 0.0  # a window that would overrun the budget is not started (the job timeout would kill it half-done)
     while not getattr(state, "done", False):
         if max_windows is not None and done_count >= max_windows:
             break
-        if budget_seconds is not None and clock() - began >= budget_seconds:
+        if budget_seconds is not None and clock() - began + longest >= budget_seconds:
             break
+        window_began = clock()
         end = state.get() or (today - timedelta(days=live_days + 1))
         if end < oldest:
             state.set(end, done=True)
@@ -68,4 +70,5 @@ def run_backward(
         previous_day = window.start - timedelta(days=1)
         state.set(previous_day, done=previous_day < oldest)
         done_count += 1
+        longest = max(longest, clock() - window_began)
     return done_count

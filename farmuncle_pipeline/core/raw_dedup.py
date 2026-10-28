@@ -178,12 +178,21 @@ def upsert_raw_price_entries_batch(
         return 0, 0
 
     entries = []
+    seen = set()  # the same record twice in one page would fail the whole INSERT ... ON CONFLICT
     for parsed in parsed_records:
         payload = {
             "modal_price": parsed["modal_price"],
             "min_price": parsed["min_price"],
             "max_price": parsed["max_price"],
         }
+        identity = (
+            parsed.get("raw_state") or parsed["state"], parsed["market"], parsed["district"] or "",
+            parsed["commodity"], parsed["raw_variety"] or "", parsed.get("raw_grade") or "",
+            parsed["price_date"], _content_hash(payload),
+        )
+        if identity in seen:
+            continue
+        seen.add(identity)
         entries.append(
             {
                 "resource": resource,

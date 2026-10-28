@@ -196,6 +196,8 @@ class IdentityClient:
 
     def __init__(self, client: "Client") -> None:
         self._client = client
+        # (mandi_id, crop_id) pairs learned to report Rs/kg; see per_kg_pairs() in the warehouse.
+        self.per_kg_pairs: frozenset = frozenset()
         self._mandi_cache: dict[tuple[str, str, str | None], int] = {}
         self._crop_cache: dict[str, int] = {}
         self._variety_cache: dict[str, str] = {}
@@ -434,6 +436,14 @@ class IdentityClient:
             (row["variety_id"], row["normalized_name"]): row["id"] for row in grade_rows
         }
         self._preloaded = True
+        self.per_kg_pairs = self._load_per_kg_pairs()
+
+    def _load_per_kg_pairs(self) -> frozenset:
+        try:
+            data = self._client.rpc("per_kg_pairs", {}).execute().data or []
+            return frozenset((int(r["mandi_id"]), int(r["crop_id"])) for r in data)
+        except Exception:  # no evidence -> assume per quintal, never guess per kg
+            return frozenset()
 
     def resolve_mandi(
         self,

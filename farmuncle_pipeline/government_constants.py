@@ -113,32 +113,3 @@ BLOCKED_MARKETS: Final[frozenset[tuple[str, str]]] = frozenset({
 def is_blocked_market(state: str, market: str) -> bool:
     return (canonical_state(state).casefold(), market.strip().casefold()) in BLOCKED_MARKETS
 
-
-# Markets that type Rs/kg into the per-quintal field (found by auditing 2026-10: 20 of ~3,000).
-# Everywhere else a price is per quintal, always divided by 100. (state, market), case-insensitive.
-PER_KG_MARKETS: Final[frozenset[tuple[str, str]]] = frozenset((state.casefold(), market.casefold()) for state, market in (
-    ("Maharashtra", "Pune APMC"),
-    ("Maharashtra", "Pune(Pimpri) APMC"),
-    ("Maharashtra", "Pune(Manjri) APMC"),
-    ("Maharashtra", "Pune(Khadiki) APMC"),
-    ("Maharashtra", "Pune(Moshi) APMC"),
-    ("Maharashtra", "Akluj APMC"),
-    ("Maharashtra", "Shrirampur APMC"),
-    ("Maharashtra", "Rahata APMC"),
-    ("Maharashtra", "Patan APMC"),
-    ("Goa", "Mapusa APMC"),
-    ("Goa", "Margao APMC"),
-    ("Goa", "Curchorem APMC"),
-    ("Goa", "Canacona APMC"),
-    ("Goa", "Pernem APMC"),
-    ("Goa", "Sanquelim APMC"),
-    ("NCT of Delhi", "Flower Market,Gazipur APMC"),
-    ("Andaman and Nicobar", "Diglipur Vegetable Market (Subhashgram)"),
-    ("Haryana", "Rania APMC"),
-    ("Haryana", "Rania(Jiwan nagar) APMC"),
-    ("Telangana", "RYTHU BAZAR ERRAGADDA"),
-))
-
-
-def reports_per_kg(state: str, market: str) -> bool:
-    return (canonical_state(state).casefold(), market.strip().casefold()) in PER_KG_MARKETS

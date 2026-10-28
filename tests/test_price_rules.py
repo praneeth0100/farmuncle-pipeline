@@ -21,8 +21,10 @@ def _row(**kw):
     return {**_price_row(), "unit": "kg", "modal_price": 40.0, **kw}
 
 
-def _process(**overrides):
+def _process(per_kg=False, **overrides):
     identity = _make_identity(mandis=[_KNOWN_MANDI], crops=[_KNOWN_CROP])
+    if per_kg:  # mandi 42 / crop 10 is a learned per-kg pair
+        identity.per_kg_pairs = frozenset({(42, 10)})
     return process_records(
         [{**_RESOURCE_1_RECORD, **overrides}], identity=identity, unit="kg", source=Source.RESOURCE_1,
         batch_id="b", raw_api_batch_id="r", job_name="t",
@@ -59,10 +61,7 @@ def test_bad_rows_are_quarantined_without_touching_the_table():
     assert {q["error_code"] for q in client.quarantined} == {"DQ-PRICE-FLOOR", "DQ-PRICE-NONPOSITIVE"}
 
 
-# --- government prices are per quintal, except a few markets that report per kg ---
-
-_KG_MARKET = {"market": "Pune(Manjri) APMC", "state": "Maharashtra"}
-
+# --- government prices are per quintal, except market+crop pairs learned to report per kg ---
 
 def test_quintal_price_is_divided_by_100():
     row = _process(modal_price="2500", min_price="2000", max_price="3000").price_rows[0]
@@ -70,27 +69,48 @@ def test_quintal_price_is_divided_by_100():
     assert "unit_reported_kg" not in row["quality_components"]
 
 
-def test_per_kg_market_price_under_100_is_not_divided_again():
-    row = _process(modal_price="38", min_price="30", max_price="45", **_KG_MARKET).price_rows[0]
+def test_learned_per_kg_pair_under_100_is_not_divided_again():
+    row = _process(per_kg=True, modal_price="38", min_price="30", max_price="45").price_rows[0]
     assert (row["modal_price"], row["min_price"], row["max_price"]) == (38.0, 30.0, 45.0)
     assert row["quality_components"]["unit_reported_kg"] is True
 
 
-def test_per_kg_market_still_divides_its_quintal_prices():
-    row = _process(modal_price="2500", min_price="2000", max_price="3000", **_KG_MARKET).price_rows[0]
+def test_learned_per_kg_pair_still_divides_a_quintal_sized_price():
+    row = _process(per_kg=True, modal_price="2500", min_price="2000", max_price="3000").price_rows[0]
     assert row["modal_price"] == 25.0
     assert "unit_reported_kg" not in row["quality_components"]
 
 
-def test_other_markets_never_skip_the_division_even_for_small_prices():
-    # Guntur is not a per-kg market: 38 is a slip and becomes 0.38, which the writer quarantines.
+def test_unknown_pair_never_skips_the_division_even_for_a_small_price():
+    # Not a learned pair: 38 is a slip and becomes 0.38, which the writer quarantines.
     row = _process(modal_price="38", min_price="30", max_price="45").price_rows[0]
     assert row["modal_price"] == 0.38
     assert "unit_reported_kg" not in row["quality_components"]
 
 
-def test_exactly_100_in_a_per_kg_market_is_a_quintal_price():
-    assert _process(modal_price="100", min_price="90", max_price="110", **_KG_MARKET).price_rows[0]["modal_price"] == 1.0
+def test_exactly_100_is_a_quintal_price():
+    assert _process(per_kg=True, modal_price="100", min_price="90", max_price="110").price_rows[0]["modal_price"] == 1.0
+
+
+def test_preload_learns_per_kg_pairs_from_the_database():
+    from tests.test_identity_client import FakeIdentityDBClient
+    from farmuncle_pipeline.core.identity_client import IdentityClient
+
+    class _Rpc(FakeIdentityDBClient):
+        def rpc(self, name, params=None):
+            if name == "per_kg_pairs":
+                data = [{"mandi_id": 42, "crop_id": 10}]
+                return type("R", (), {"execute": lambda s: type("D", (), {"data": data})()})()
+            return super().rpc(name, params or {})
+
+    identity = IdentityClient(_Rpc(mandis=[_KNOWN_MANDI], crops=[_KNOWN_CROP], rpc_responses={}))
+    identity.preload()
+    assert identity.per_kg_pairs == frozenset({(42, 10)})
+
+
+def test_preload_survives_a_failing_pair_lookup_by_assuming_quintal():
+    identity = _make_identity(mandis=[_KNOWN_MANDI], crops=[_KNOWN_CROP])  # fake has no per_kg_pairs
+    assert identity.per_kg_pairs == frozenset()
 
 
 # --- blocked markets ---------------------------------------------------------

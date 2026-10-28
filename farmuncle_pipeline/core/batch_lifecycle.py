@@ -522,6 +522,7 @@ def insert_failed_page(
     page: int,
     error_code: str,
     error_message: str,
+    state: str | None = None,
 ) -> None:
     """
     Purpose:
@@ -538,6 +539,9 @@ def insert_failed_page(
         error_code: one of spec §7's error codes (INGEST-001,
             INGEST-002, ...).
         error_message: human-readable detail for triage.
+        state: the state whose page failed; `retry_failed_pages` needs
+            it (with `page`, counted within that state) to re-fetch
+            exactly this page.
     Outputs:
         None.
     Failure modes:
@@ -551,6 +555,8 @@ def insert_failed_page(
         "error_message": error_message,
         "status": "PENDING",
     }
+    if state is not None:
+        payload["state"] = state
     try:
         client.table("failed_pages").insert(payload).execute()
     except Exception as exc:

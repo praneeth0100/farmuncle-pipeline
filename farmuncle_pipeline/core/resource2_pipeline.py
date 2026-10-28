@@ -56,6 +56,7 @@ from farmuncle_pipeline.core.batch_lifecycle import (
     start_batch,
     start_raw_batch,
 )
+from farmuncle_pipeline.core.api_params import build_params
 from farmuncle_pipeline.core.raw_dedup import upsert_raw_price_entries_batch
 from farmuncle_pipeline.core.identity_client import IdentityClient
 from farmuncle_pipeline.ingest_common import (
@@ -176,14 +177,14 @@ def _fetch_all_resource_2_pages(
         while True:
             page_in_state += 1
             total_pages += 1
-            params = {
-                "api-key": api_key,
-                "format": "json",
-                "limit": runtime.page_size,
-                "offset": offset,
-                "filters[Arrival_Date]": date_str,
-                "filters[State]": state,
-            }
+            params = build_params(
+                resource=Resource.RESOURCE_2,
+                api_key=api_key,
+                page_size=runtime.page_size,
+                offset=offset,
+                date_str=date_str,
+                state=state,
+            )
             result = fetch_page(
                 url=runtime.api_base_resource_2,
                 params=params,
@@ -216,6 +217,7 @@ def _fetch_all_resource_2_pages(
                         f"[state={state}] "
                         f"{result.error or 'unknown error after exhausting retries'}"
                     ),
+                    state=state,
                 )
                 all_states_complete = False
                 break  # move on to the next state; don't abandon the whole date

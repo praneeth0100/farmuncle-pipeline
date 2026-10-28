@@ -114,6 +114,7 @@ from farmuncle_pipeline.core.batch_lifecycle import (
     start_batch,
     start_raw_batch,
 )
+from farmuncle_pipeline.core.api_params import build_params
 from farmuncle_pipeline.core.raw_dedup import upsert_raw_price_entries_batch
 from farmuncle_pipeline.core.identity_client import IdentityClient
 from farmuncle_pipeline.ingest_common import (
@@ -216,14 +217,14 @@ def _fetch_all_resource_1_pages(
         while True:
             page_in_state += 1
             total_pages += 1
-            params = {
-                "api-key": api_key,
-                "format": "json",
-                "limit": runtime.page_size,
-                "offset": offset,
-                "filters[arrival_date]": date_str,
-                "filters[state.keyword]": state,
-            }
+            params = build_params(
+                resource=Resource.RESOURCE_1,
+                api_key=api_key,
+                page_size=runtime.page_size,
+                offset=offset,
+                date_str=date_str,
+                state=state,
+            )
             result = fetch_page(
                 url=runtime.api_base_resource_1,
                 params=params,
@@ -257,9 +258,10 @@ def _fetch_all_resource_1_pages(
                     supabase,
                     batch_id=batch_id,
                     resource=Resource.RESOURCE_1,
-                    page=total_pages,
+                    page=page_in_state,
                     error_code="INGEST-002",
                     error_message=result.error or "unknown error after exhausting retries",
+                    state=state,
                 )
                 all_states_complete = False
                 break

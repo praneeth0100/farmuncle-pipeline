@@ -81,6 +81,7 @@ from farmuncle_pipeline.core.batch_lifecycle import (
     start_batch,
     start_raw_batch,
 )
+from farmuncle_pipeline.core.api_params import build_params
 from farmuncle_pipeline.core.raw_dedup import upsert_raw_price_entries_batch
 from farmuncle_pipeline.core.identity_client import IdentityClient
 from farmuncle_pipeline.core.price_cache import refresh_price_cache
@@ -137,6 +138,14 @@ def _parse_state_from_error_message(error_message: str | None) -> str | None:
     return error_message[len("[state=") : end] or None
 
 
+def _retry_state(fp: dict) -> str | None:
+    """Purpose: the state a failed page belonged to. The `state` column
+    (written since `insert_failed_page` gained it) wins; rows recorded
+    before that carry it only in the `"[state=XXX]"` message prefix
+    (Resource 2). `None` means the page cannot be re-fetched."""
+    return fp.get("state") or _parse_state_from_error_message(fp.get("error_message"))
+
+
 def _fetch_pending_failed_pages(supabase) -> list[dict]:
     """Purpose: every PENDING failed_pages row, oldest first (a simple,
     defensible default for a retry queue — see §16's "oldest-first"
@@ -144,7 +153,7 @@ def _fetch_pending_failed_pages(supabase) -> list[dict]:
     try:
         response = (
             supabase.table("failed_pages")
-            .select("id,batch_id,resource,page,error_code,error_message,created_at")
+            .select("id,batch_id,resource,state,page,error_code,error_message,created_at")
             .eq("status", FailedPageStatus.PENDING.value)
             .order("created_at")
             .execute()
@@ -232,16 +241,17 @@ def run_retry_failed_pages(ctx) -> None:
                 continue
 
             resource_enum = Resource(fp["resource"])
-            state = None
-            if resource_enum == Resource.RESOURCE_2:
-                state = _parse_state_from_error_message(fp.get("error_message"))
-                if state is None:
-                    print(
-                        f"[retry_failed_pages] failed_pages id={fp['id']}: could not recover "
-                        f"state from error_message, skipping (needs manual investigation)."
-                    )
-                    skipped += 1
-                    continue
+            # Both resources page per state, so a page without a known
+            # state cannot be re-fetched. Skip it rather than fetch a
+            # nationwide page and mark it RESOLVED.
+            state = _retry_state(fp)
+            if state is None:
+                print(
+                    f"[retry_failed_pages] failed_pages id={fp['id']}: no state recorded "
+                    f"for this page, skipping (needs manual investigation)."
+                )
+                skipped += 1
+                continue
 
             date_str = target_date.strftime("%d/%m/%Y")
             offset = (fp["page"] - 1) * runtime.page_size
@@ -250,15 +260,14 @@ def run_retry_failed_pages(ctx) -> None:
                 if resource_enum == Resource.RESOURCE_1
                 else runtime.api_base_resource_2
             )
-            params = {
-                "api-key": ctx.secrets.data_gov_api_key,
-                "format": "json",
-                "limit": runtime.page_size,
-                "offset": offset,
-                "filters[arrival_date]": date_str,
-            }
-            if state is not None:
-                params["filters[state]"] = state
+            params = build_params(
+                resource=resource_enum,
+                api_key=ctx.secrets.data_gov_api_key,
+                page_size=runtime.page_size,
+                offset=offset,
+                date_str=date_str,
+                state=state,
+            )
 
             result = fetch_page(
                 url=url,

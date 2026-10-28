@@ -118,14 +118,19 @@ def fetch_page(
             response = requests.get(url, params=params, headers=headers, timeout=timeout)
             response.raise_for_status()
             data = response.json()
-            duration_ms = int((time.perf_counter() - start) * 1000)
-            return PageFetchResult(
-                ok=True,
-                records=data.get("records", []),
-                raw_response=data,
-                error=None,
-                duration_ms=duration_ms,
-            )
+            records = data.get("records") if isinstance(data, dict) else None
+            if isinstance(records, list):
+                duration_ms = int((time.perf_counter() - start) * 1000)
+                return PageFetchResult(
+                    ok=True,
+                    records=records,
+                    raw_response=data,
+                    error=None,
+                    duration_ms=duration_ms,
+                )
+            # data.gov.in reports quota and key errors as HTTP 200 with a
+            # different body. That is a failed page, never "zero records".
+            last_error = f"response has no 'records' list: {str(data)[:300]}"
         except requests.exceptions.Timeout as exc:
             last_error = f"timeout: {exc}"
         except requests.exceptions.RequestException as exc:

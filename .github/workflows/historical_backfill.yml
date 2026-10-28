@@ -15,7 +15,7 @@ on:
         required: false
 
 concurrency:
-  group: historical-backfill
+  group: warehouse-writer
   cancel-in-progress: false # see live_tick.yml for why — mid-run cancellation
   # would abandon whatever date the loop is currently on with its batch
   # rows correctly closed, but should still be avoided so as not to

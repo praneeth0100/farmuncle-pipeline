@@ -16,7 +16,7 @@ on:
   workflow_dispatch: {}
 
 concurrency:
-  group: retry-failed-pages
+  group: warehouse-writer
   cancel-in-progress: false # see live_tick.yml for why
 
 jobs:

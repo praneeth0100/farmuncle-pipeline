@@ -14,7 +14,7 @@ on:
         required: false
 
 concurrency:
-  group: archive-history
+  group: warehouse-writer
   cancel-in-progress: false # a cancelled run would leave a half-ingested window and a RUNNING batch
 
 jobs:

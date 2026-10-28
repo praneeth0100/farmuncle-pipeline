@@ -8,7 +8,7 @@ on:
   workflow_dispatch: {}
 
 concurrency:
-  group: purge-raw
+  group: warehouse-writer
   cancel-in-progress: false
 
 jobs:

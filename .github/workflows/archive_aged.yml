@@ -9,7 +9,7 @@ on:
   workflow_dispatch: {}
 
 concurrency:
-  group: archive-aged
+  group: warehouse-writer
   cancel-in-progress: false
 
 jobs:

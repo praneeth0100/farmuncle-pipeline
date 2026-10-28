@@ -45,6 +45,7 @@ from dataclasses import dataclass
 from farmuncle_pipeline.config import ConfigError, NORMALIZATION_VERSION, PARSER_VERSION, PER_ANIMAL_CROP_IDS, Source
 from farmuncle_pipeline.core.identity_client import IdentityClient
 from farmuncle_pipeline.core.quality_scoring import compute_quality
+from farmuncle_pipeline.core.peer_scale import peer_scale
 from farmuncle_pipeline.core.resource_client import is_blocked_record, parse_agmarknet_record
 
 
@@ -147,6 +148,7 @@ def process_records(
         # gets stored on the row.
         is_animal = crop.id in PER_ANIMAL_CROP_IDS
         per_kg_reported = False
+        peer_factor = None
         row_unit = "animal" if is_animal else "kg"
         if is_animal:
             row_modal_price = parsed["modal_price"]
@@ -165,6 +167,11 @@ def process_records(
             row_modal_price = modal / divisor if modal is not None else None
             row_min_price = parsed["min_price"] / divisor if parsed["min_price"] is not None else None
             row_max_price = parsed["max_price"] / divisor if parsed["max_price"] is not None else None
+            # Still far below the same crop elsewhere by a clean power of ten: multiply it back.
+            if not per_kg_reported:
+                scaled = peer_scale(row_modal_price, row_min_price, row_max_price, identity.crop_medians.get(crop.id))
+                if scaled:
+                    peer_factor, row_modal_price, row_min_price, row_max_price = scaled
 
         quality = compute_quality(
             source=source,
@@ -209,9 +216,11 @@ def process_records(
                 "parser_version": PARSER_VERSION,
                 "normalization_version": NORMALIZATION_VERSION,
                 "quality_score": quality.score,
-                "quality_components": (
-                    {**quality.components, "unit_reported_kg": True} if per_kg_reported else quality.components
-                ),
+                "quality_components": {
+                    **quality.components,
+                    **({"unit_reported_kg": True} if per_kg_reported else {}),
+                    **({"peer_scaled": peer_factor} if peer_factor else {}),
+                },
             }
         )
 

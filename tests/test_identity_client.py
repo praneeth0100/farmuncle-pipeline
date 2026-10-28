@@ -184,7 +184,7 @@ class FakeIdentityDBClient:
         return _FakeTable(self._tables[name])
 
     def rpc(self, name, params):
-        if name != "per_kg_pairs":  # preload's unit lookup is not an entity-resolution round trip
+        if name not in ("per_kg_pairs", "crop_price_medians"):  # preload's unit lookup is not an entity-resolution round trip
             self.rpc_calls.append((name, dict(params)))
         value = self._rpc_responses.get(name)
         if callable(value):

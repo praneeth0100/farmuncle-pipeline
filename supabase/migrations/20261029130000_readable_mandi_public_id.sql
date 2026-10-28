@@ -60,3 +60,9 @@ end $$;
 drop trigger if exists trg_mandis_set_public_id on mandis;
 create trigger trg_mandis_set_public_id before insert on mandis
     for each row execute function mandis_set_public_id();
+
+-- Reference data: readable by the app and the API, writable only by the migration owner.
+alter table state_codes enable row level security;
+revoke all on state_codes from anon, authenticated;
+grant select on state_codes to anon, authenticated;
+create policy state_codes_read on state_codes for select using (true);

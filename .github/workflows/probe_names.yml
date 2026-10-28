@@ -1,0 +1,28 @@
+name: probe_names
+
+# Read-only check: which market/commodity names did the feed use on these dates that the warehouse lacks?
+on:
+  workflow_dispatch:
+    inputs:
+      dates:
+        description: "Space-separated dates, e.g. 2018-03-14 2020-03-11"
+        required: true
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Probe names
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DATA_GOV_API_KEY: ${{ secrets.DATA_GOV_API_KEY }}
+          HISTORY_SUPABASE_URL: ${{ secrets.HISTORY_SUPABASE_URL }}
+          HISTORY_SUPABASE_SERVICE_KEY: ${{ secrets.HISTORY_SUPABASE_SERVICE_KEY }}
+        run: python -m farmuncle_pipeline.ops.probe_names ${{ github.event.inputs.dates }}

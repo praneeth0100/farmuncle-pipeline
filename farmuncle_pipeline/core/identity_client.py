@@ -107,6 +107,16 @@ def _normalize_market_name(name: str | None) -> str:
     return s.strip()
 
 
+_MANDI_NOISE = re.compile(r"\s*\b(apmc|mandi|market|f\s*&?\s*v|grain|sandhai|committee)\b\s*")
+
+
+def _mandi_match_key(name: str | None) -> str:
+    """Python mirror of the SQL `_mandi_match_key`, which find_or_create_mandi matches on (no whitespace
+    collapsing, on purpose). Without it ~98% of feed names missed the preload and each cost an RPC."""
+    s = re.sub(r"[()]", " ", name or "").lower()
+    return _MANDI_NOISE.sub(" ", s).strip(" ")
+
+
 def _normalize_crop_name(name: str | None) -> str:
     """Python mirror of the `normalize_crop_name` SQL function — same
     body as `_normalize_market_name` today (both RPCs happen to be
@@ -496,10 +506,10 @@ class IdentityClient:
             return ResolvedEntity(id=self._mandi_cache[key], first_seen_this_run=False)
 
         if self._preloaded:
-            normalized = _normalize_market_name(name)
-            preload_id = self._mandi_exact.get((normalized, state, district))
+            # shortcut: district aliases (district_aliases table) are not mirrored; it is empty today, add them if it fills.
+            preload_id = self._mandi_exact.get((_mandi_match_key(name), state, district.strip() if district else district))
             if preload_id is None:
-                preload_id = self._mandi_alias.get(normalized)
+                preload_id = self._mandi_alias.get(_mandi_match_key(name)) or self._mandi_alias.get(_normalize_market_name(name))
             if preload_id is not None:
                 self._mandi_cache[key] = preload_id
                 self._mandi_preload_hits += 1

@@ -222,7 +222,7 @@ def test_resolve_mandi_run_cache_hit_skips_second_rpc_call():
 
 def test_resolve_mandi_preload_exact_match_skips_rpc_entirely():
     client = FakeIdentityDBClient(
-        mandis=[{"id": 42, "normalized_name": "guntur apmc", "state": "Andhra Pradesh", "district": "Guntur"}],
+        mandis=[{"id": 42, "normalized_name": "guntur", "state": "Andhra Pradesh", "district": "Guntur"}],
         rpc_responses={"find_or_create_mandi": 999},  # would be wrong if this got called
     )
     identity = IdentityClient(client)
@@ -345,7 +345,7 @@ def test_stats_starts_at_zero_for_all_twelve_counters():
 
 def test_stats_counts_mandi_cache_preload_and_rpc_tiers_separately():
     client = FakeIdentityDBClient(
-        mandis=[{"id": 42, "normalized_name": "guntur apmc", "state": "Andhra Pradesh", "district": "Guntur"}],
+        mandis=[{"id": 42, "normalized_name": "guntur", "state": "Andhra Pradesh", "district": "Guntur"}],
         rpc_responses={"find_or_create_mandi": 888},
     )
     identity = IdentityClient(client)
@@ -399,7 +399,7 @@ def test_preload_fetches_more_than_one_page_of_mandis():
     # to the first page, so most mandis were never in the snapshot and
     # every one of them paid a full RPC round trip, every single day.
     mandis = [
-        {"id": i, "normalized_name": f"mandi {i}", "state": "Andhra Pradesh", "district": None}
+        {"id": i, "normalized_name": f"town {i}", "state": "Andhra Pradesh", "district": None}
         for i in range(2300)
     ]
     client = FakeIdentityDBClient(mandis=mandis, rpc_responses={"find_or_create_mandi": -1})
@@ -408,7 +408,7 @@ def test_preload_fetches_more_than_one_page_of_mandis():
 
     # A mandi that only existed on the third page (past two 1000-row
     # pages) must still resolve via preload, not fall through to RPC.
-    result = identity.resolve_mandi(name="Mandi 2299", state="Andhra Pradesh", district=None, source=Source.RESOURCE_2)
+    result = identity.resolve_mandi(name="Town 2299", state="Andhra Pradesh", district=None, source=Source.RESOURCE_2)
     assert result.id == 2299
     assert client.rpc_calls == []
 
@@ -430,7 +430,7 @@ def test_preload_pagination_stops_exactly_on_a_page_boundary():
     # Exactly PAGE_SIZE rows (1000) must not trigger a spurious extra
     # request for a phantom second page.
     mandis = [
-        {"id": i, "normalized_name": f"mandi {i}", "state": "Andhra Pradesh", "district": None}
+        {"id": i, "normalized_name": f"town {i}", "state": "Andhra Pradesh", "district": None}
         for i in range(1000)
     ]
     client = FakeIdentityDBClient(mandis=mandis)
@@ -514,3 +514,20 @@ def test_resolve_grade_id_calls_rpc_once_per_distinct_variety_and_grade():
     assert first == second == 55
     assert len(client.rpc_calls) == 1
     assert client.rpc_calls[0] == ("find_or_create_grade", {"p_variety_id": 77, "p_raw_text": "non-faq"})
+
+# Expected keys come straight from the live SQL function _mandi_match_key (note: it does not collapse spaces).
+@pytest.mark.parametrize("raw,expected", [
+    ("Tanda(Rampur) APMC", "tanda rampur"),
+    ("Thirukalukundram(Uzhavar Sandhai )", "thirukalukundram uzhavar"),
+    ("Pallapatti (Uzhavar Sandhai )", "pallapatti  uzhavar"),
+    ("Gandhigramam(Uzhavar Sandhai)", "gandhigramam uzhavar"),
+    ("AGRICULTURE PRODUCE MARKET COMITEE CHANDWAD", "agriculture produce comitee chandwad"),
+    ("Bhulath (Nadala) APMC", "bhulath  nadala"),
+    ("Payyannur Market", "payyannur"),
+    ("Ahwa-Dang APMC", "ahwa-dang"),
+    ("PMY Una", "pmy una"),
+    ("Kadapa", "kadapa"),
+])
+def test_mandi_match_key_mirrors_the_sql_function(raw, expected):
+    from farmuncle_pipeline.core.identity_client import _mandi_match_key
+    assert _mandi_match_key(raw) == expected

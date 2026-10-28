@@ -101,7 +101,7 @@ class JobAlreadyRunningError(Exception):
 _STALE_LOCK_MINUTES = 90
 
 
-def _reap_stale_running_lock(client: "Client", *, job_name: str) -> None:
+def _reap_stale_running_lock(client: "Client", *, job_name: str, table: str = "ingestion_batches") -> None:
     """
     Purpose:
         Before attempting to acquire the §12 concurrency lock, check
@@ -130,7 +130,7 @@ def _reap_stale_running_lock(client: "Client", *, job_name: str) -> None:
     """
     try:
         response = (
-            client.table("ingestion_batches")
+            client.table(table)
             .select("id,started_at")
             .eq("job_name", job_name)
             .eq("status", IngestionBatchStatus.RUNNING.value)
@@ -157,7 +157,7 @@ def _reap_stale_running_lock(client: "Client", *, job_name: str) -> None:
         return  # plausibly still a real, in-progress run — leave it alone
 
     try:
-        client.table("ingestion_batches").update(
+        client.table(table).update(
             {
                 "status": IngestionBatchStatus.FAILED.value,
                 "completed_at": _utcnow_iso(),
@@ -410,6 +410,7 @@ def start_raw_batch(
         "date_range_start": date_range_start.isoformat() if date_range_start else None,
         "date_range_end": date_range_end.isoformat() if date_range_end else None,
     }
+    _reap_stale_running_lock(client, job_name=job_name, table="raw_api_batches")
     try:
         response = client.table("raw_api_batches").insert(payload).execute()
     except Exception as exc:

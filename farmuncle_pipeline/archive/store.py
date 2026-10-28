@@ -46,3 +46,12 @@ class R2Store:
 
     def size(self, key: str) -> int:
         return int(self._client.head_object(Bucket=self.bucket, Key=key)["ContentLength"])
+
+    def selfcheck(self) -> None:
+        """Write and read back a small file, so a bad token, bucket or endpoint fails loudly before any data moves."""
+        import datetime
+
+        body = f"ok {datetime.datetime.now(datetime.timezone.utc).isoformat()}".encode()
+        self.put("health/last_check.txt", body, "text/plain")
+        if self.size("health/last_check.txt") != len(body):
+            raise RuntimeError("R2 self-check failed: stored size does not match")

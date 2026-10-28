@@ -46,6 +46,7 @@ Explicitly out of scope for this file:
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass
 
@@ -72,6 +73,11 @@ class PageFetchResult:
     raw_response: dict
     error: str | None
     duration_ms: int
+
+
+def _redact(text: str) -> str:
+    """Error text is stored in failed_pages; the key must never reach it."""
+    return re.sub(r"(api[-_]key=)[^&\s'\"]+", lambda m: m.group(1) + "***", text, flags=re.I)
 
 
 def fetch_page(
@@ -145,7 +151,8 @@ def fetch_page(
 
     duration_ms = int((time.perf_counter() - start) * 1000)
     return PageFetchResult(
-        ok=False, records=[], raw_response={}, error=last_error, duration_ms=duration_ms
+        ok=False, records=[], raw_response={},
+        error=_redact(last_error) if last_error else last_error, duration_ms=duration_ms
     )
 
 

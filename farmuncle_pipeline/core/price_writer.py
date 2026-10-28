@@ -90,6 +90,25 @@ def _is_row_level_error(exc: Exception) -> bool:
     return any(code.startswith(prefix) for prefix in _ROW_LEVEL_ERROR_CODE_PREFIXES)
 
 
+def price_rule_violation(row: dict) -> str | None:
+    """Error code if `row` is a price that cannot be real, else None.
+
+    Checked before the bulk upsert so a day with dozens of bad government
+    rows doesn't push every chunk through the slow row-by-row fallback.
+    Ordering (min <= modal <= max) stays with the chk_prices_min_max
+    constraint.
+    """
+    modal = row.get("modal_price")
+    if modal is None:
+        return None
+    if modal <= 0:
+        return "DQ-PRICE-NONPOSITIVE"
+    # Under Rs 1/kg (Rs 100/quintal) is a government data-entry slip, not a price.
+    if row.get("unit") == "kg" and modal < 1:
+        return "DQ-PRICE-FLOOR"
+    return None
+
+
 @dataclass(frozen=True)
 class UpsertResult:
     """Purpose: bundles what happened during `upsert_price_rows` so
@@ -268,6 +287,25 @@ def upsert_price_rows(
     if not rows:
         return UpsertResult(rows_upserted=0, rows_quarantined=0)
 
+    total_quarantined = 0
+    kept: list[dict] = []
+    for row in rows:
+        code = price_rule_violation(row)
+        if code is None:
+            kept.append(row)
+            continue
+        if batch_id is None or resource is None:
+            raise ConfigError(
+                f"{code} row but no batch_id/resource was supplied to quarantine it — "
+                f"cannot safely drop data with no lineage."
+            )
+        insert_data_quality_issue(
+            client, batch_id=batch_id, resource=resource, row=row,
+            error_code=code, error_message=f"price rule {code}: modal_price={row.get('modal_price')}",
+        )
+        total_quarantined += 1
+    rows = kept
+
     deduped: dict[tuple, dict] = {}
     for row in rows:
         key = (
@@ -288,7 +326,6 @@ def upsert_price_rows(
 
     table = client.table("mandi_daily_prices")
     total_upserted = 0
-    total_quarantined = 0
 
     for i in range(0, len(unique_rows), batch_size):
         chunk = unique_rows[i : i + batch_size]

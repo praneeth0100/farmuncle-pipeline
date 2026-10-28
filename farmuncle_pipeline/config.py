@@ -116,6 +116,8 @@ PER_ANIMAL_CROP_IDS: Final[frozenset[int]] = frozenset({
     257,  # Goat
     210,  # Sheep
     260,  # Pigs
+    320,  # He Buffalo
+    321,  # She Goat
 })
 
 NORMALIZATION_VERSION: Final[int] = 1   # mandi_aliases/crop_aliases/mandi_daily_prices.normalization_version

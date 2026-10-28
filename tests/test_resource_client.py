@@ -127,3 +127,19 @@ def test_timeout_is_a_failed_page(monkeypatch):
     result, _ = _call(monkeypatch, [requests.exceptions.Timeout("slow")], max_retries=0)
     assert result.ok is False
     assert "timeout" in result.error
+
+
+def test_failed_page_error_never_contains_the_api_key(monkeypatch):
+    import requests
+    from farmuncle_pipeline.core import resource_client
+
+    def boom(url, params, headers, timeout):
+        raise requests.exceptions.ConnectionError(f"HTTPSConnectionPool: {url}?api-key=SECRETKEY123&limit=500")
+
+    monkeypatch.setattr(resource_client.requests, "get", boom)
+    result = resource_client.fetch_page(
+        url="https://x/resource/1", params={"api-key": "SECRETKEY123"}, headers={},
+        timeout=1, max_retries=0, retry_delay_seconds=0,
+    )
+    assert not result.ok
+    assert "SECRETKEY123" not in result.error

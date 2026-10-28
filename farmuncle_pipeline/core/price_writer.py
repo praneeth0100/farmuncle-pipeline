@@ -119,6 +119,21 @@ class UpsertResult:
     rows_upserted: int
     rows_quarantined: int
 
+# One price per (canonical mandi, crop, variety, grade, day): the unique key uq_prices_canonical_key.
+# Text spellings and the source market a row came from are deliberately NOT part of it, otherwise the
+# same price reported twice (merged mandis, case variants) would be stored twice.
+_ON_CONFLICT = "mandi_id,crop_id,variety_id,grade_id,price_date"
+_PAGE = 1000  # PostgREST returns at most this many rows per request
+
+
+def _canonical_key(row: dict) -> tuple:
+    return (row["mandi_id"], row["crop_id"], row["variety_id"], row["grade_id"], row["price_date"])
+
+
+def _is_own_source(row: dict) -> bool:
+    return row.get("source_mandi_id") == row["mandi_id"]
+
+
 # §8's precedence order, expressed as a rank: higher wins. A row is
 # only allowed to overwrite an existing row at the same business key
 # if its source's rank is >= the existing row's rank. Manual is
@@ -169,13 +184,24 @@ def filter_rows_by_precedence(client, rows: list[dict], new_source: Source) -> t
     new_rank = _SOURCE_RANK.get(new_source.value, 0)
     price_dates = sorted({row["price_date"] for row in rows})
 
+    existing_rows: list[dict] = []
     try:
-        response = (
-            client.table("mandi_daily_prices")
-            .select("mandi_id,crop_id,variety,grade,price_date,source,source_mandi_id")
-            .in_("price_date", price_dates)
-            .execute()
-        )
+        start = 0
+        while True:
+            page = (
+                client.table("mandi_daily_prices")
+                .select("id,mandi_id,crop_id,variety_id,grade_id,price_date,source")
+                .in_("price_date", price_dates)
+                .order("id")
+                .range(start, start + _PAGE - 1)
+                .execute()
+                .data
+                or []
+            )
+            existing_rows.extend(page)
+            if len(page) < _PAGE:
+                break
+            start += _PAGE
     except Exception as exc:
         raise ConfigError(
             f"Failed to fetch existing mandi_daily_prices rows for precedence check "
@@ -183,29 +209,14 @@ def filter_rows_by_precedence(client, rows: list[dict], new_source: Source) -> t
         ) from exc
 
     existing_rank: dict[tuple, int] = {}
-    for existing in response.data or []:
-        key = (
-            existing["mandi_id"],
-            existing["crop_id"],
-            existing["variety"],
-            existing.get("grade") or "",
-            existing["price_date"],
-            # 2026-07-25: added — see upsert_price_rows for why.
-            existing.get("source_mandi_id"),
-        )
-        existing_rank[key] = _SOURCE_RANK.get(existing["source"], 0)
+    for existing in existing_rows:
+        key = _canonical_key(existing)
+        existing_rank[key] = max(existing_rank.get(key, 0), _SOURCE_RANK.get(existing["source"], 0))
 
     kept: list[dict] = []
     skipped = 0
     for row in rows:
-        key = (
-            row["mandi_id"],
-            row["crop_id"],
-            row["variety"],
-            row.get("grade") or "",
-            row["price_date"],
-            row.get("source_mandi_id"),
-        )
+        key = _canonical_key(row)
         if existing_rank.get(key, 0) > new_rank:
             skipped += 1
             continue
@@ -307,19 +318,11 @@ def upsert_price_rows(
 
     deduped: dict[tuple, dict] = {}
     for row in rows:
-        key = (
-            row["mandi_id"],
-            row["crop_id"],
-            row["variety"],
-            row.get("grade") or "",
-            row["price_date"],
-            # 2026-07-25: added to match uq_prices_business_key_v2. Without
-            # this, two rows from different source markets (same mandi after
-            # a merge, same crop/variety/grade/date) would silently collapse
-            # to one here — before the upsert call even runs — defeating the
-            # reason source_mandi_id was added in the first place.
-            row.get("source_mandi_id"),
-        )
+        key = _canonical_key(row)
+        kept_row = deduped.get(key)
+        # Same price from two source markets: keep the mandi's own; otherwise the last one wins.
+        if kept_row is not None and _is_own_source(kept_row) and not _is_own_source(row):
+            continue
         deduped[key] = row
     unique_rows = list(deduped.values())
 
@@ -337,7 +340,7 @@ def upsert_price_rows(
             # constraint matching the ON CONFLICT specification".
             table.upsert(
                 chunk,
-                on_conflict="mandi_id,crop_id,variety,grade,price_date,source_mandi_id",
+                on_conflict=_ON_CONFLICT,
             ).execute()
             total_upserted += len(chunk)
             continue
@@ -360,7 +363,7 @@ def upsert_price_rows(
             try:
                 table.upsert(
                     [row],
-                    on_conflict="mandi_id,crop_id,variety,grade,price_date,source_mandi_id",
+                    on_conflict=_ON_CONFLICT,
                 ).execute()
                 total_upserted += 1
             except Exception as row_exc:

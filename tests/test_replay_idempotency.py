@@ -57,6 +57,8 @@ def _price_row(mandi_id=1, crop_id=1, variety="FAQ", grade=None, price_date="202
         "crop_id": crop_id,
         "variety": variety,
         "grade": grade,
+        "variety_id": 1,
+        "grade_id": 1,
         "price_date": price_date,
         "modal_price": modal_price,
     }
@@ -65,7 +67,7 @@ def _price_row(mandi_id=1, crop_id=1, variety="FAQ", grade=None, price_date="202
 class _RealUpsertSemanticsTable:
     """Purpose: unlike test_price_writer.py's `_FakePriceTable` (which
     just appends every attempted row), this fake actually enforces
-    `on_conflict=(mandi_id,crop_id,variety,grade,price_date,source_mandi_id)`
+    `on_conflict=(mandi_id,crop_id,variety_id,grade_id,price_date)`
     upsert semantics — a dict keyed by that business key, so a second
     upsert of the same key overwrites in place. This is the one property
     replay/idempotency tests need that the existing price_writer fake
@@ -83,20 +85,13 @@ class _RealUpsertSemanticsTable:
         return self
 
     def upsert(self, rows, on_conflict=None):
-        assert on_conflict == "mandi_id,crop_id,variety,grade,price_date,source_mandi_id"
+        assert on_conflict == "mandi_id,crop_id,variety_id,grade_id,price_date"
         self._pending = rows
         return self
 
     def execute(self):
         for row in self._pending:
-            key = (
-                row["mandi_id"],
-                row["crop_id"],
-                row["variety"],
-                row.get("grade") or "",
-                row["price_date"],
-                row.get("source_mandi_id"),
-            )
+            key = (row["mandi_id"], row["crop_id"], row["variety_id"], row["grade_id"], row["price_date"])
             self.store[key] = row
         return FakeResponse(data=self._pending)
 
@@ -125,7 +120,7 @@ def test_replay_with_a_revised_value_overwrites_not_appends():
     upsert_price_rows(client, [revised], batch_size=1000)
 
     assert len(client.store) == 1
-    key = (1, 1, "FAQ", "", "2026-07-15", None)
+    key = (1, 1, 1, 1, "2026-07-15")
     assert client.store[key]["modal_price"] == 2650
 
 

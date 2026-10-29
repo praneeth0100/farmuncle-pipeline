@@ -186,14 +186,17 @@ def filter_rows_by_precedence(client, rows: list[dict], new_source: Source) -> t
 
     existing_rows: list[dict] = []
     try:
-        start = 0
+        # Keyset paging (after the last id), not offsets: a deep offset on a full day makes the
+        # database slow until it hits its statement timeout.
+        last_id = 0
         while True:
             page = (
                 client.table("mandi_daily_prices")
                 .select("id,mandi_id,crop_id,variety_id,grade_id,price_date,source,source_mandi_id")
                 .in_("price_date", price_dates)
+                .gt("id", last_id)
                 .order("id")
-                .range(start, start + _PAGE - 1)
+                .limit(_PAGE)
                 .execute()
                 .data
                 or []
@@ -201,7 +204,7 @@ def filter_rows_by_precedence(client, rows: list[dict], new_source: Source) -> t
             existing_rows.extend(page)
             if len(page) < _PAGE:
                 break
-            start += _PAGE
+            last_id = page[-1]["id"]
     except Exception as exc:
         raise ConfigError(
             f"Failed to fetch existing mandi_daily_prices rows for precedence check "

@@ -38,16 +38,16 @@ def manifest_key(day: date) -> str:
 
 def fetch_day_rows(supabase, day: date) -> list[dict]:
     rows: list[dict] = []
-    start = 0
+    last_id = 0  # keyset paging: a deep offset on a full day hits the database's statement timeout
     while True:
         page = (
-            supabase.table("mandi_daily_prices").select(",".join(FACT_COLUMNS))
-            .eq("price_date", day.isoformat()).order("id").range(start, start + PAGE - 1).execute().data or []
+            supabase.table("mandi_daily_prices").select("id," + ",".join(FACT_COLUMNS))
+            .eq("price_date", day.isoformat()).gt("id", last_id).order("id").limit(PAGE).execute().data or []
         )
         rows.extend(page)
         if len(page) < PAGE:
             return rows
-        start += PAGE
+        last_id = page[-1]["id"]
 
 
 def rows_to_parquet(rows: list[dict]) -> bytes:
@@ -73,16 +73,16 @@ def quarantine_key(day: date) -> str:
 def fetch_quarantine_rows(supabase, day: date) -> list[dict]:
     """Doubtful rows (quarantined, merge collisions) for the day; delete_price_window removes them with it."""
     rows: list[dict] = []
-    start = 0
+    last_id = 0  # keyset paging, as in fetch_day_rows
     while True:
         page = (
             supabase.table("data_quality_issues").select(",".join(QUARANTINE_COLUMNS))
-            .eq("row_data->>price_date", day.isoformat()).order("id").range(start, start + PAGE - 1).execute().data or []
+            .eq("row_data->>price_date", day.isoformat()).gt("id", last_id).order("id").limit(PAGE).execute().data or []
         )
         rows.extend(page)
         if len(page) < PAGE:
             return rows
-        start += PAGE
+        last_id = page[-1]["id"]
 
 
 def _archive_quarantine(supabase, store, day: date) -> int:

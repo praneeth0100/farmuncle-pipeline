@@ -1,6 +1,6 @@
 name: purge_raw
 
-# Nightly: raw price entries older than 10 days are deleted (they exist only to deduplicate and replay
+# Nightly: raw price entries older than 3 days are deleted (they exist only to deduplicate and replay
 # the last few days; the facts live in mandi_daily_prices and then in R2).
 on:
   schedule:
@@ -24,7 +24,7 @@ jobs:
 
       - run: pip install -r requirements.txt
 
-      - name: Purge raw entries older than 10 days
+      - name: Purge raw entries older than 3 days
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}

@@ -1,4 +1,4 @@
-"""Delete raw price entries older than the retention window (default 10 days).
+"""Delete raw price entries older than the retention window (default 3 days).
 
 The raw table is append-only; purge_raw_price_entries() is the one function allowed to delete from it.
 """
@@ -9,7 +9,7 @@ import argparse
 
 from farmuncle_pipeline.ingest_common import validate_startup
 
-KEEP_DAYS = 10
+KEEP_DAYS = 3
 
 
 def main() -> None:

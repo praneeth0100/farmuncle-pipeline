@@ -38,10 +38,11 @@ def test_series_has_gaps_as_null_and_trims_ends():
 
 def test_history_is_weekly_and_skips_short_spans():
     days = days_of({END - timedelta(days=n): 10.0 + n for n in range(0, 70)})
-    f = pa_.history_file(K, days, STAMP)
+    f = pa_.history_file(K, days, STAMP, min_weeks=8)
     assert f["v"] == 2 and f["start_week"] == "2026-W34" and len(f["avg"]) == 11
     assert f["min"][0] <= f["avg"][0] <= f["max"][0]
-    assert pa_.history_file(K, days_of({END: 10.0, END - timedelta(days=9): 11.0}), STAMP) is None
+    assert pa_.history_file(K, days_of({END: 10.0, END - timedelta(days=9): 11.0}), STAMP, min_weeks=8) is None
+    assert pa_.history_file(K, days, STAMP) is None  # under a year: the series already covers it
 
 
 def test_change_blocks_and_unavailable_blocks_with_short_history():
@@ -100,19 +101,34 @@ class Store(dict):
         return [k for k in self if k.startswith(prefix)]
 
 
-def test_publish_writes_three_files_per_key_and_skips_unchanged():
-    day = "2026-10-20"
-    buf = io.BytesIO()
-    pq.write_table(pa.Table.from_pylist([{"mandi_id": 1, "crop_id": 10, "variety_id": 100, "grade_id": 5, "price_date": day,
-                                          "modal_price": 20.0, "min_price": 18.0, "max_price": 22.0}]), buf)
-    store = Store({f"facts/daily/date={day}.parquet": buf.getvalue()})
+def test_active_keys_and_refresh_days():
+    assert pa_.is_active(days_of({END - timedelta(days=n): 5.0 for n in range(10)}), END)
+    assert not pa_.is_active(days_of({END - timedelta(days=n): 5.0 for n in range(9)}), END)
+    assert not pa_.is_active(days_of({END - timedelta(days=100 + n): 5.0 for n in range(20)}), END)  # nothing in 90 days
+    assert pa_.due("series", "series/a.json", {}, END)  # never written: now
+    slots = {d: pa_.due("series", "series/a.json", {"series/a.json": "h"}, END + timedelta(days=d)) for d in range(6)}
+    assert sum(slots.values()) == 2  # once every 3 days
+    week = [pa_.due("insights", "insights/a.json", {"insights/a.json": "h"}, END + timedelta(days=d)) for d in range(14)]
+    assert sum(week) == 2  # once every 7 days
+
+
+def test_publish_writes_files_for_active_keys_and_skips_unchanged():
+    store = Store()
+    for n in range(12):  # 12 archived report days make the key active
+        day = f"2026-10-{10 + n:02d}"
+        buf = io.BytesIO()
+        pq.write_table(pa.Table.from_pylist([{"mandi_id": 1, "crop_id": 10, "variety_id": 100, "grade_id": 5, "price_date": day,
+                                              "modal_price": 20.0 + n, "min_price": 18.0, "max_price": 22.0}]), buf)
+        store[f"facts/daily/date={day}.parquet"] = buf.getvalue()
     prices = [{"id": 1, "mandi_id": 1, "crop_id": 10, "variety_id": 100, "grade_id": 5, "price_date": "2026-10-29",
                "modal_price": 24.5, "min_price": 21.5, "max_price": 27.5, "created_at": "2026-10-29T05:30:00+00:00"}]
     now = datetime(2026, 10, 30, 2, 0, tzinfo=pl.IST)
     out = pa_.publish(DB(prices), store, now)
-    assert out["keys"] == 1 and out["as_of"] == "2026-10-29" and out["series"] == 1 and out["insights"] == 1
+    assert out["keys"] == 1 and out["as_of"] == "2026-10-29" and (out["series"], out["insights"], out["history"]) == (1, 1, 0)
     s = json.loads(store["series/onion/ka.dharwad.hubli/onion.red.json"])
-    assert s["start"] == day and s["modal"][0] == 20.0 and s["modal"][-1] == 24.5 and len(s["modal"]) == 10
+    assert s["start"] == "2026-10-10" and s["modal"][0] == 20.0 and s["modal"][-1] == 24.5 and len(s["modal"]) == 20
     assert json.loads(store["meta/manifest.json"])["analytics_built_at"] == "2026-10-30T02:00:00+05:30"
-    again = pa_.publish(DB(prices), store, now + timedelta(hours=1))
-    assert (again["series"], again["history"], again["insights"]) == (0, 0, 0)
+    again = pa_.publish(DB(prices), store, now + timedelta(days=1))
+    assert (again["series"], again["history"], again["insights"]) == (0, 0, 0)  # unchanged data is never rewritten
+    sparse = pa_.publish(DB([]), Store({k: v for k, v in store.items() if k.startswith("facts/")}), now)
+    assert sparse["series"] == 1  # 12 archive days alone are enough for an active key

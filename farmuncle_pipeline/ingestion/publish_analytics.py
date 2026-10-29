@@ -6,6 +6,9 @@
 
 Reads facts/daily/*.parquet (read only). Writes only the three prefixes above, meta/analytics_hashes.json (the version
 of every file written, so unchanged files are skipped) and meta/manifest.json (only analytics_built_at).
+To stay inside R2's free 1M writes a month, only active keys (10+ report days in the last 90) get files, and a key's file
+is rewritten only on its own day: series every 3 days, history and insights every 7, staggered by a hash of the key so each
+night does a fraction. A key with no file yet is written at once. (Rewriting every changed file nightly was about 1.1M a month.)
 Blocks that need more history than the archive holds yet come out with available: false and fill in as it grows.
 
 shortcut: every loaded day of every key is held in memory (about 1.7M rows for 90 days). Fine to roughly one year;
@@ -16,6 +19,7 @@ from __future__ import annotations
 
 import io
 import math
+import zlib
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
@@ -29,9 +33,11 @@ from farmuncle_pipeline.ingestion.publish_live import (
 HASHES_KEY = "meta/analytics_hashes.json"
 BUDGET = {"series/": 8_000, "history/": 12_000, "insights/": 3_000}  # gzipped bytes, spec 6.7
 WINDOW_DAYS = 3  # warehouse days; older days come from the archive
-MIN_HISTORY_WEEKS = 8  # a history file shorter than this adds nothing over the series
+MIN_HISTORY_WEEKS = 53  # the series already covers a year; history only adds value beyond it (and costs writes)
 NEARBY_KM = 100
 WORKERS = 48
+REFRESH_DAYS = {"series": 3, "history": 7, "insights": 7}
+ACTIVE_REPORTS, ACTIVE_DAYS = 10, 90
 COLS = ["mandi_id", "crop_id", "variety_id", "grade_id", "price_date", "modal_price", "min_price", "max_price"]
 
 
@@ -77,7 +83,7 @@ def series_file(k, days: dict, end: date, stamp: str) -> dict | None:
             "start": ds[0].isoformat(), "modal": cols[0], "min": cols[1], "max": cols[2]}
 
 
-def history_file(k, days: dict, stamp: str) -> dict | None:
+def history_file(k, days: dict, stamp: str, min_weeks: int = MIN_HISTORY_WEEKS) -> dict | None:
     weeks: dict[date, list] = {}
     for d, (_, modal, mn, mx) in days.items():
         y, w, _ = d.isocalendar()
@@ -89,7 +95,7 @@ def history_file(k, days: dict, stamp: str) -> dict | None:
             a[2].append(mx)
     first, last = min(weeks), max(weeks)
     n = (last - first).days // 7 + 1
-    if n < MIN_HISTORY_WEEKS:
+    if n < min_weeks:
         return None
     avg, lo, hi = [], [], []
     for i in range(n):
@@ -232,6 +238,16 @@ def insights_file(k, days: dict, end: date, coords: dict, recent: dict, stamp: s
     return out
 
 
+def is_active(days: dict, end: date) -> bool:
+    return sum(1 for d in days if (end - d).days < ACTIVE_DAYS) >= ACTIVE_REPORTS
+
+
+def due(prefix: str, key: str, hashes: dict, today: date) -> bool:
+    """Never written, or this is the key's refresh day (a stable slot from a hash of the key)."""
+    n = REFRESH_DAYS[prefix]
+    return key not in hashes or today.toordinal() % n == zlib.crc32(key.encode()) % n
+
+
 def _check_budget(key: str, data: bytes) -> None:
     import gzip
 
@@ -274,11 +290,14 @@ def publish(db, store, now: datetime | None = None) -> dict:
     def one(item):
         k, days = item
         out = {}
-        for prefix, payload in (("series", series_file(k, days, end, stamp)), ("history", history_file(k, days, stamp)),
-                                ("insights", insights_file(k, days, end, coords, recent, stamp))):
+        if not is_active(days, end):
+            return out
+        for prefix, make in (("series", lambda: series_file(k, days, end, stamp)), ("history", lambda: history_file(k, days, stamp)),
+                             ("insights", lambda: insights_file(k, days, end, coords, recent, stamp))):
+            key = f"{prefix}/{k[1]}/{k[0]}/{k[2]}.json"
+            payload = make() if due(prefix, key, hashes, today) else None
             if payload is None:
                 continue
-            key = f"{prefix}/{k[1]}/{k[0]}/{k[2]}.json"
             h = content_hash(payload)
             if hashes.get(key) != h:
                 data = _encode(payload)

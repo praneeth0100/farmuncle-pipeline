@@ -36,14 +36,48 @@ def next_window(end: date, days: int = 10, oldest: date | None = None) -> Window
     return Window(start, end)
 
 
+def _settle(days, *, ingest_day, archive_day, delete_window, refresh_reference) -> list[tuple[date, str]]:
+    """Pull, verify and delete each day. A day that fails is skipped and returned; the rest go on."""
+    ready: list[date] = []
+    failed: list[tuple[date, str]] = []
+    for day in days:
+        try:
+            status = ingest_day(day).final_status
+            if str(getattr(status, "value", status)) == "FAILED":
+                raise RuntimeError("ingest returned FAILED")
+            ready.append(day)
+        except Exception as exc:
+            failed.append((day, str(exc)))
+    refresh_reference()
+    for day in ready:
+        try:
+            archive_day(day)          # raises ArchiveError unless the upload is verified
+        except Exception as exc:
+            failed.append((day, str(exc)))
+            continue
+        delete_window(day, day)       # one day at a time, straight after its verified upload
+    return failed
+
+
 def run_backward(
     *, today: date, oldest: date, state, ingest_day, archive_day, delete_window, refresh_reference,
     after_window=None, max_windows: int | None = None, window_days: int = 10, live_days: int = 10,
-    budget_seconds: float | None = None, clock=time.monotonic,
+    budget_seconds: float | None = None, clock=time.monotonic, leftover_days=None,
 ) -> int:
-    """Process windows until `oldest`, the window cap or the time budget. Returns windows completed."""
+    """Process windows until `oldest`, the window cap or the time budget. Returns windows completed.
+
+    `leftover_days(after, up_to)` lists days still in the warehouse between the processed range and the
+    live window (days skipped earlier). They are retried first, every run, so a skipped day is not lost.
+    """
     began = clock()
     done_count = 0
+    settle = dict(ingest_day=ingest_day, archive_day=archive_day, delete_window=delete_window,
+                  refresh_reference=refresh_reference)
+    frontier = state.get()
+    if leftover_days and frontier:
+        retry = sorted(leftover_days(frontier + timedelta(days=1), today - timedelta(days=live_days + 1)), reverse=True)
+        for day, reason in _settle(retry, **settle):
+            print(f"[archive_history] retry: {day} still not archived, left in the warehouse: {reason}")
     longest = 0.0  # a window that would overrun the budget is not started (the job timeout would kill it half-done)
     while not getattr(state, "done", False):
         if max_windows is not None and done_count >= max_windows:
@@ -59,24 +93,7 @@ def run_backward(
 
         # A day that fails never stops the window: the others are archived and deleted. A failed day
         # stays in the warehouse (nothing is deleted without a verified upload) and is listed for retry.
-        ready: list[date] = []
-        failed: list[tuple[date, str]] = []
-        for day in window.days():
-            try:
-                status = ingest_day(day).final_status
-                if str(getattr(status, "value", status)) == "FAILED":
-                    raise RuntimeError("ingest returned FAILED")
-                ready.append(day)
-            except Exception as exc:
-                failed.append((day, str(exc)))
-        refresh_reference()
-        for day in ready:
-            try:
-                archive_day(day)          # raises ArchiveError unless the upload is verified
-            except Exception as exc:
-                failed.append((day, str(exc)))
-                continue
-            delete_window(day, day)       # one day at a time, straight after its verified upload
+        failed = _settle(window.days(), **settle)
         if after_window:
             after_window(window)
         for day, reason in failed:

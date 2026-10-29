@@ -225,3 +225,21 @@ def test_range_archive_takes_only_final_days_inside_the_range():
         {"price_date": "2026-10-18", "status": "FINAL"},
     ]
     assert final_days(rows, date(2026, 10, 19), date(2026, 10, 28)) == [date(2026, 10, 19), date(2026, 10, 27)]
+
+
+def test_skipped_days_are_retried_first_every_run():
+    log, state = [], _State(next_end=date(2026, 10, 8))
+    run_backward(today=date(2026, 10, 29), oldest=date(2026, 8, 1), state=state, max_windows=0,
+                 leftover_days=lambda after, up_to: [date(2026, 10, 12)], **_deps(log))
+    assert ("ingest", date(2026, 10, 12)) in log
+    assert ("delete", date(2026, 10, 12), date(2026, 10, 12)) in log
+    assert state.next_end == date(2026, 10, 8)  # the retry does not move the window position
+
+
+def test_a_retry_that_still_fails_does_not_stop_the_run():
+    log, state = [], _State(next_end=date(2026, 10, 8))
+    run_backward(today=date(2026, 10, 29), oldest=date(2026, 8, 1), state=state, max_windows=1,
+                 leftover_days=lambda after, up_to: [date(2026, 10, 12)],
+                 **_deps(log, fail_ingest_on=date(2026, 10, 12)))
+    assert ("delete", date(2026, 10, 12), date(2026, 10, 12)) not in log
+    assert ("archive", date(2026, 10, 7)) in log  # the window still runs

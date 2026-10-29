@@ -408,7 +408,7 @@ def test_upsert_price_rows_isolates_one_bad_row_keeps_the_rest():
     # every good row in that chunk (and would continue to subsequent
     # chunks, though this test uses only one chunk).
     good_rows = [_price_row(mandi_id=i) for i in range(3)]
-    bad_row = {**_price_row(mandi_id=999), "modal_price": 8354, "min_price": 83548, "max_price": 8354}
+    bad_row = _price_row(mandi_id=999)  # the fake database rejects this one, as for any constraint the pre-check does not mirror
     all_rows = good_rows + [bad_row]
 
     def side_effect(payload):
@@ -437,7 +437,8 @@ def test_upsert_price_rows_isolates_one_bad_row_keeps_the_rest():
     assert all(r["mandi_id"] != 999 for r in client.upserted_rows)
 
 
-def test_upsert_price_rows_transient_error_reraises_without_row_by_row_retry():
+def test_upsert_price_rows_transient_error_reraises_without_row_by_row_retry(monkeypatch):
+    monkeypatch.setattr("farmuncle_pipeline.core.price_writer.time.sleep", lambda _s: None)
     calls = []
 
     def side_effect(payload):
@@ -450,10 +451,26 @@ def test_upsert_price_rows_transient_error_reraises_without_row_by_row_retry():
     with pytest.raises(ConfigError):
         upsert_price_rows(client, rows, batch_size=10, batch_id="batch-1", resource=Resource.RESOURCE_2)
 
-    # Exactly one attempt (the bulk chunk) — a transient failure must
-    # NOT trigger the row-by-row fallback (that would be 1 + 3 = 4
-    # calls instead).
-    assert len(calls) == 1
+    # The bulk chunk is retried (3 attempts) and then raised; a transient failure must
+    # NOT trigger the row-by-row fallback (that would add 3 more calls).
+    assert len(calls) == 3
+    assert all(len(payload) == 3 for payload in calls)
+
+
+def test_wrong_order_prices_are_quarantined_before_the_bulk_call_not_via_row_by_row():
+    good = [_price_row(mandi_id=i) for i in range(3)]
+    bad = {**_price_row(mandi_id=999), "modal_price": 8354, "min_price": 83548, "max_price": 8354}
+    seen = []
+
+    def side_effect(payload):
+        seen.append(payload)
+
+    client = _FakeUpsertClient(chunk_side_effect=side_effect)
+    result = upsert_price_rows(client, good + [bad], batch_size=10, batch_id="batch-1", resource=Resource.RESOURCE_2)
+
+    assert result.rows_upserted == 3 and result.rows_quarantined == 1
+    assert len(seen) == 1 and len(seen[0]) == 3  # one bulk call, the bad row never sent
+    assert client.quarantined[0]["error_code"] == "DQ-PRICE-ORDER"
 
 
 def test_upsert_price_rows_refuses_to_isolate_without_batch_id_and_resource():

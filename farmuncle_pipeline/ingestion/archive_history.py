@@ -47,6 +47,10 @@ def main() -> None:
         delete_window=lambda s, e: db.rpc("delete_price_window", {"p_start": s.isoformat(), "p_end": e.isoformat()}).execute(),
         refresh_reference=lambda: db.rpc("refresh_price_reference").execute(),
         after_window=lambda w: export_catalog(db, store),
+        leftover_days=lambda after, up_to: [
+            date.fromisoformat(r if isinstance(r, str) else r["price_days_between"])
+            for r in db.rpc("price_days_between", {"p_from": after.isoformat(), "p_to": up_to.isoformat()}).execute().data or []
+        ],
         max_windows=args.max_windows,
         budget_seconds=args.budget_minutes * 60,
     )

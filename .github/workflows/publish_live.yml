@@ -7,6 +7,8 @@ on:
     workflows: [live_tick]
     types: [completed]
   workflow_dispatch: {}
+  push:
+    branches: [b4-publish-live] # TEMP: test run from the PR branch; removed before merge
 
 concurrency:
   group: publish-live

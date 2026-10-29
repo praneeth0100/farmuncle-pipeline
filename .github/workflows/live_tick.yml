@@ -45,6 +45,20 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: python -m farmuncle_pipeline.ingestion.live_tick
 
+  # The workflow itself only "completes" when the chain job ends an hour later, so workflow_run would publish
+  # an hour late. Start the publisher straight after the pull instead.
+  publish:
+    needs: run
+    if: success()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Start publish_live
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh workflow run publish_live.yml --ref main
+
   # GitHub's cron skipped many hourly runs, so each run also starts the next one at the coming :05 UTC.
   # The cron above stays as a backup; if two chains exist, the older one sees a newer run and stops.
   chain:

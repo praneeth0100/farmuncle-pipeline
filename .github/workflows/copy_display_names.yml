@@ -1,0 +1,25 @@
+name: copy_display_names
+
+# One-off: copies clean mandi names from the app DB into the warehouse. Manual only.
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [b4-analytics] # TEMP: first run from the PR branch; removed before merge
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Copy names
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          STOREFRONT_SUPABASE_URL: ${{ secrets.STOREFRONT_SUPABASE_URL }}
+          STOREFRONT_SUPABASE_SERVICE_KEY: ${{ secrets.STOREFRONT_SUPABASE_SERVICE_KEY }}
+        run: python -m farmuncle_pipeline.scripts.copy_display_names

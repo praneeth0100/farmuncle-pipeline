@@ -22,7 +22,9 @@ from farmuncle_pipeline.ingestion.archive_range import final_days
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Copy FINAL warehouse days to R2 without deleting them.")
-    parser.add_argument("--start", default=(date.today() - timedelta(days=12)).isoformat())
+    # Default stays strictly inside the live window (delete_price_window refuses those days), so it never overlaps
+    # a day archive_history / archive_aged may be re-pulling or deleting. An older --start is a deliberate one-off.
+    parser.add_argument("--start", default=(date.today() - timedelta(days=9)).isoformat())
     parser.add_argument("--end", default="2999-12-31")
     args = parser.parse_args()
     start, end = date.fromisoformat(args.start), date.fromisoformat(args.end)
@@ -38,6 +40,8 @@ def main() -> None:
 
     rows = db.table("ingest_days").select("price_date,status").gte("price_date", start.isoformat()).lte("price_date", end.isoformat()).execute().data or []
     days = final_days(rows, start, end)
+    deleted = {r["day"] for r in db.table("archive_days").select("day").eq("status", "DELETED").execute().data or []}
+    days = [d for d in days if d.isoformat() not in deleted]  # already archived and gone: nothing to copy
     copied = 0
     for day in days:
         try:

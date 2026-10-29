@@ -6,3 +6,6 @@ language sql stable as $$
     where price_date between p_from and p_to
     order by price_date;
 $$;
+
+revoke execute on function price_days_between(date, date) from public, anon, authenticated;
+grant execute on function price_days_between(date, date) to service_role;

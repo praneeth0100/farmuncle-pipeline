@@ -1,8 +1,9 @@
 """Fill history backwards: today -> 2018 in 10-day windows.
 
-Each window: ingest its days (Resource 2) into the warehouse, snapshot reference stats, export every
-day to R2 and verify it, delete the window from the warehouse, then move on. State advances only after
-the delete, and a failure anywhere leaves the window to be redone (every step is idempotent).
+Each window: ingest its days (Resource 2) into the warehouse, snapshot reference stats, then for each day
+export it to R2, verify it and delete that day from the warehouse. A day that fails is skipped and listed,
+and the rest of the window goes on; the window then advances. A skipped day stays in the warehouse
+(nothing is deleted without a verified upload).
 The latest `live_days` stay in the warehouse for the app; they are archived when they age out.
 """
 
@@ -56,16 +57,30 @@ def run_backward(
             break
         window = next_window(end, window_days, oldest)
 
+        # A day that fails never stops the window: the others are archived and deleted. A failed day
+        # stays in the warehouse (nothing is deleted without a verified upload) and is listed for retry.
+        ready: list[date] = []
+        failed: list[tuple[date, str]] = []
         for day in window.days():
-            status = ingest_day(day).final_status
-            if str(getattr(status, "value", status)) == "FAILED":
-                raise RuntimeError(f"ingest failed for {day}; window {window.start}..{window.end} left for the next run")
+            try:
+                status = ingest_day(day).final_status
+                if str(getattr(status, "value", status)) == "FAILED":
+                    raise RuntimeError("ingest returned FAILED")
+                ready.append(day)
+            except Exception as exc:
+                failed.append((day, str(exc)))
         refresh_reference()
-        for day in window.days():
-            archive_day(day)          # raises ArchiveError unless the upload is verified
-        delete_window(window.start, window.end)
+        for day in ready:
+            try:
+                archive_day(day)          # raises ArchiveError unless the upload is verified
+            except Exception as exc:
+                failed.append((day, str(exc)))
+                continue
+            delete_window(day, day)       # one day at a time, straight after its verified upload
         if after_window:
             after_window(window)
+        for day, reason in failed:
+            print(f"[archive_history] {day} not archived this run, left in the warehouse: {reason}")
 
         previous_day = window.start - timedelta(days=1)
         state.set(previous_day, done=previous_day < oldest)

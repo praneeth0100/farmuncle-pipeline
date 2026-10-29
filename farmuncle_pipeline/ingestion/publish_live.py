@@ -3,7 +3,7 @@
 Reads the warehouse (last 3 days of prices plus master data) and writes only new objects:
   live/mandi/{public_id}.json          changed mandis only (content hash, ignoring updated_at)
   live/crop/{crop_slug}/{state}.json   changed files only
-  catalog/states.json                  rewritten only when the state list changes
+  catalog/{states,mandis,crops}.json   rewritten together, only when one of them changes (bumps catalog_version)
   meta/crop_slugs.json                 frozen crop and variety slugs (a slug is never reassigned)
   meta/live_hashes.json                version (content hash) of every live file written so far
   meta/manifest.json                   written last, so the app never sees it ahead of its files
@@ -24,12 +24,11 @@ from farmuncle_pipeline.archive.export import PAGE
 from farmuncle_pipeline.archive.store import R2Store
 
 IST = timezone(timedelta(hours=5, minutes=30))
-WINDOW_DAYS = 3  # the warehouse keeps 3 days; prev_modal can only look that far back
-RECENT_CROPS_DAYS = 14  # spec 6.2; shortcut: the warehouse only holds WINDOW_DAYS, so recent_crops covers those
+WINDOW_DAYS = 3  # the warehouse keeps 3 days; older days come from the R2 archive (read only)
+RECENT_CROPS_DAYS = 14  # spec 6.2; prev_modal and recent_crops look back this far
 WRITERS = 16
-BUDGET = {"live/mandi/": 10_000, "live/crop/": 10_000}  # gzipped bytes, spec 6.7
-HASHES_KEY, MANIFEST_KEY, SLUGS_KEY, STATES_KEY = (
-    "meta/live_hashes.json", "meta/manifest.json", "meta/crop_slugs.json", "catalog/states.json")
+BUDGET = {"live/mandi/": 10_000, "live/crop/": 10_000, "catalog/mandis.json": 250_000}  # gzipped bytes, spec 6.7
+HASHES_KEY, MANIFEST_KEY, SLUGS_KEY = "meta/live_hashes.json", "meta/manifest.json", "meta/crop_slugs.json"
 
 
 def slugify(text: str) -> str:
@@ -162,6 +161,55 @@ def build_files(*, prices, mandis, crops, varieties, grades, registry, today: da
     return out
 
 
+def build_catalogs(*, mandis, crops, varieties, codes: dict, registry: dict) -> dict:
+    """Pure: {catalog key: payload without "version"}. Merged mandis stay listed so the app can follow merged_into_id."""
+    pid = {m["id"]: m["public_id"] for m in mandis}
+    live = [m for m in mandis if m.get("status") == "ACTIVE" and not m.get("merged_into_id")]
+    states = sorted(({"id": codes[s], "name": s} for s in {m["state"] for m in live} if s in codes), key=lambda s: s["id"])
+    mandi_rows = [{
+        "id": m["public_id"], "name": m["name"], "district": ".".join(m["public_id"].split(".")[:2]),
+        "state": codes.get(m["state"]) or m["public_id"].split(".")[0],
+        "lat": m.get("latitude"), "lng": m.get("longitude"), "status": m.get("status"),
+        "merged_into_id": pid.get(m.get("merged_into_id")), "names": {}  # shortcut: no translations in the warehouse yet
+    } for m in sorted(mandis, key=lambda m: m["public_id"])]
+    reg_c, reg_v = registry["crops"], registry["varieties"]
+    by_crop = defaultdict(list)
+    for v in sorted(varieties, key=lambda v: v["id"]):
+        if not v.get("merged_into_id") and str(v["id"]) in reg_v and v.get("status", "ACTIVE") == "ACTIVE":
+            by_crop[v["crop_id"]].append({"id": reg_v[str(v["id"])], "name": v["name"]})
+    crop_rows = []
+    for c in sorted(crops, key=lambda c: reg_c.get(str(c["id"]), "")):
+        slug = reg_c.get(str(c["id"]))
+        if not slug or c.get("merged_into_id") or c.get("status", "ACTIVE") != "ACTIVE":
+            continue
+        vs = by_crop[c["id"]]
+        if f"{slug}.other" not in {v["id"] for v in vs}:  # items without a variety are published as crop.other
+            vs.append({"id": f"{slug}.other", "name": "Other"})
+        crop_rows.append({"id": slug, "name": c["name"], "category": (c.get("category") or "").lower() or None,
+                          "unit": "animal" if (c.get("display_unit") or "").lower() == "animal" else "kg",
+                          "names": {}, "varieties": vs})
+    return {"catalog/states.json": {"v": 1, "states": states}, "catalog/mandis.json": {"v": 1, "mandis": mandi_rows},
+            "catalog/crops.json": {"v": 1, "crops": crop_rows}}
+
+
+def archive_rows(store, today: date) -> list[dict]:
+    """Daily rows older than the warehouse window, from the R2 archive (read only); days not archived yet are skipped."""
+    import io
+
+    import pyarrow.parquet as pq
+
+    def read(day: date) -> list[dict]:
+        raw = _get_bytes(store, f"facts/daily/date={day.isoformat()}.parquet")
+        if raw is None:
+            return []
+        cols = ["mandi_id", "crop_id", "variety_id", "grade_id", "price_date", "modal_price", "min_price", "max_price"]
+        return pq.read_table(io.BytesIO(raw), columns=cols).to_pylist()
+
+    days = [today - timedelta(days=n) for n in range(WINDOW_DAYS + 1, RECENT_CROPS_DAYS + 1)]
+    with ThreadPoolExecutor(WRITERS) as pool:
+        return [r for rows in pool.map(read, days) for r in rows]
+
+
 def content_hash(payload: dict) -> str:
     body = {k: v for k, v in payload.items() if k != "updated_at"}
     return hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:16]
@@ -177,25 +225,31 @@ def _check_budget(key: str, data: bytes) -> None:
             raise RuntimeError(f"{key} is {len(gzip.compress(data))} bytes gzipped, over the {limit} budget")
 
 
-def _get_json(store, key: str):
+def _get_bytes(store, key: str) -> bytes | None:
     try:
-        return json.loads(store.get(key))
+        return store.get(key)
     except Exception as exc:  # a missing object is the first run; anything else must not look like one
-        code = getattr(exc, "response", {}).get("Error", {}).get("Code") if hasattr(exc, "response") else None
-        if code in ("NoSuchKey", "404", "NotFound"):
+        if getattr(exc, "response", {}).get("Error", {}).get("Code") in ("NoSuchKey", "404", "NotFound"):
             return None
         raise
+
+
+def _get_json(store, key: str):
+    raw = _get_bytes(store, key)
+    return None if raw is None else json.loads(raw)
 
 
 def publish(db, store, now: datetime | None = None) -> dict:
     now = now or datetime.now(IST)
     today = now.astimezone(IST).date()
     print("[publish_live] reading the warehouse", flush=True)
-    mandis = _fetch(db, "mandis", "id,public_id,state,status,merged_into_id")
-    crops = _fetch(db, "crops", "id,name,merged_into_id")
+    mandis = _fetch(db, "mandis", "id,public_id,name,state,status,merged_into_id,latitude,longitude")
+    crops = _fetch(db, "crops", "id,name,category,display_unit,status,merged_into_id")
+    varieties = _fetch(db, "varieties", "id,crop_id,name,status,merged_into_id")
+    codes = {r["state"]: r["code"] for r in _fetch_state_codes(db)}
     files = build_files(
-        prices=_fetch_prices(db, today - timedelta(days=WINDOW_DAYS)), mandis=mandis, crops=crops,
-        varieties=_fetch(db, "varieties", "id,crop_id,name"), grades=_fetch(db, "grades", "id,name"),
+        prices=archive_rows(store, today) + _fetch_prices(db, today - timedelta(days=WINDOW_DAYS)),
+        mandis=mandis, crops=crops, varieties=varieties, grades=_fetch(db, "grades", "id,name"),
         registry=_get_json(store, SLUGS_KEY) or {}, today=today, now=now)
     print(f"[publish_live] built {len(files) - 1} files", flush=True)
     registry = files.pop(SLUGS_KEY)
@@ -217,21 +271,23 @@ def publish(db, store, now: datetime | None = None) -> dict:
         list(pool.map(lambda kv: store.put(kv[0], kv[1], "application/json"), encoded.items()))
     hashes.update({k: content_hash(changed[k]) for k in encoded})
 
-    codes = {r["state"]: r["code"] for r in _fetch_state_codes(db)}
-    active = {m["state"] for m in mandis if m.get("status") == "ACTIVE" and not m.get("merged_into_id")}
-    states = sorted(({"id": codes[s], "name": s} for s in active if s in codes), key=lambda s: s["id"])
     manifest = _get_json(store, MANIFEST_KEY) or {}
-    old_states = _get_json(store, STATES_KEY)
     version = int(manifest.get("catalog_version") or 1)
-    if old_states is None or old_states.get("states") != states:
-        version = version + 1 if old_states is not None else version
-        store.put(STATES_KEY, _encode({"v": 1, "version": version, "states": states}), "application/json")
+    catalogs = build_catalogs(mandis=mandis, crops=crops, varieties=varieties, codes=codes, registry=registry)
+    new = {k: content_hash(p) for k, p in catalogs.items()}
+    if any(hashes.get(k) != h for k, h in new.items()):
+        version += 1 if any(k in hashes for k in new) else 0  # the first publish keeps the manifest's version
+        for k, p in catalogs.items():
+            data = _encode({**p, "version": version})
+            _check_budget(k, data)
+            store.put(k, data, "application/json")
+        hashes.update(new)
     store.put(SLUGS_KEY, _encode(registry), "application/json")
     store.put(HASHES_KEY, _encode(hashes), "application/json")
     store.put(MANIFEST_KEY, _encode({
         "v": 1, "live_updated_at": stamp, "analytics_built_at": manifest.get("analytics_built_at"),
         "catalog_version": version, "min_app_schema": manifest.get("min_app_schema", 1)}), "application/json")
-    return {"files": len(files), "written": len(changed), "states": len(states)}
+    return {"files": len(files), "written": len(changed), "catalog": version}
 
 
 def _fetch_state_codes(db) -> list[dict]:

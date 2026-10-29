@@ -10,12 +10,16 @@ from tests.fakes import FakeResponse
 NOW = datetime(2026, 10, 29, 9, 0, tzinfo=pl.IST)
 TODAY = "2026-10-29"
 MANDIS = [
-    {"id": 1, "public_id": "ka.dharwad.hubli", "state": "Karnataka", "status": "ACTIVE", "merged_into_id": None},
-    {"id": 2, "public_id": "ka.dharwad.hubli_dup", "state": "Karnataka", "status": "MERGED", "merged_into_id": 1},
-    {"id": 3, "public_id": "mh.pune.pune", "state": "Maharashtra", "status": "ACTIVE", "merged_into_id": None},
+    {"id": 1, "public_id": "ka.dharwad.hubli", "name": "Hubli", "state": "Karnataka", "status": "ACTIVE", "merged_into_id": None,
+     "latitude": 15.36, "longitude": 75.12},
+    {"id": 2, "public_id": "ka.dharwad.hubli_dup", "name": "Hubli Dup", "state": "Karnataka", "status": "MERGED", "merged_into_id": 1,
+     "latitude": None, "longitude": None},
+    {"id": 3, "public_id": "mh.pune.pune", "name": "Pune", "state": "Maharashtra", "status": "ACTIVE", "merged_into_id": None,
+     "latitude": 18.5, "longitude": 73.8},
 ]
-CROPS = [{"id": 10, "name": "Onion", "merged_into_id": None}, {"id": 11, "name": "Tomato", "merged_into_id": None}]
-VARIETIES = [{"id": 100, "crop_id": 10, "name": "Red"}]
+CROPS = [{"id": 10, "name": "Onion", "category": "Vegetable", "display_unit": "Quintal", "status": "ACTIVE", "merged_into_id": None},
+         {"id": 11, "name": "Tomato", "category": None, "display_unit": "Animal", "status": "ACTIVE", "merged_into_id": None}]
+VARIETIES = [{"id": 100, "crop_id": 10, "name": "Red", "status": "ACTIVE", "merged_into_id": None}]
 GRADES = [{"id": 5, "name": "FAQ"}]
 
 
@@ -62,13 +66,17 @@ def test_hash_ignores_updated_at():
     assert pl.content_hash(a) == pl.content_hash({**a, "updated_at": "later"})
 
 
+class Missing(Exception):
+    response = {"Error": {"Code": "NoSuchKey"}}
+
+
 class Store(dict):
     def put(self, key, data, content_type=""):
         self[key] = data
 
     def get(self, key):
         if key not in self:
-            raise KeyError(key)
+            raise Missing()
         return self[key]
 
 
@@ -102,11 +110,11 @@ class DB:
         return Query(list(self.t[name]))
 
 
-def test_publish_writes_changed_only_and_manifest(monkeypatch):
-    monkeypatch.setattr(pl, "_get_json", lambda s, k: json.loads(s[k]) if k in s else None)
+def test_publish_writes_changed_only_and_manifest():
     store = Store()
     first = pl.publish(DB(PRICES), store, NOW)
     assert first["written"] == first["files"] == 4
+    assert json.loads(store["catalog/mandis.json"])["version"] == 1
     assert [s["id"] for s in json.loads(store["catalog/states.json"])["states"]] == ["ka", "mh"]
     assert json.loads(store["meta/manifest.json"])["live_updated_at"] == "2026-10-29T09:00:00+05:30"
     assert set(json.loads(store["meta/crop_slugs.json"])["crops"].values()) == {"onion", "tomato"}
@@ -115,3 +123,36 @@ def test_publish_writes_changed_only_and_manifest(monkeypatch):
     assert json.loads(store["meta/manifest.json"])["live_updated_at"] == "2026-10-29T10:00:00+05:30"
     changed = PRICES + [price(3, 10, TODAY, 21, 100)]
     assert pl.publish(DB(changed), store, later)["written"] == 2  # pune mandi and the new onion/mh list
+
+
+def test_catalogs_follow_contract():
+    reg = pl.assign_slugs(CROPS, VARIETIES, {})
+    cat = pl.build_catalogs(mandis=MANDIS, crops=CROPS, varieties=VARIETIES, codes={"Karnataka": "ka", "Maharashtra": "mh"}, registry=reg)
+    assert cat["catalog/states.json"]["states"] == [{"id": "ka", "name": "Karnataka"}, {"id": "mh", "name": "Maharashtra"}]
+    hubli, dup = cat["catalog/mandis.json"]["mandis"][:2]
+    assert hubli == {"id": "ka.dharwad.hubli", "name": "Hubli", "district": "ka.dharwad", "state": "ka", "lat": 15.36,
+                     "lng": 75.12, "status": "ACTIVE", "merged_into_id": None, "names": {}}
+    assert dup["merged_into_id"] == "ka.dharwad.hubli"
+    onion, tomato = cat["catalog/crops.json"]["crops"]
+    assert onion["category"] == "vegetable" and onion["unit"] == "kg"
+    assert onion["varieties"] == [{"id": "onion.red", "name": "Red"}, {"id": "onion.other", "name": "Other"}]
+    assert tomato["unit"] == "animal" and tomato["category"] is None
+
+
+def test_archive_rows_fill_prev_and_recent_crops():
+    import io
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    rows = [{"mandi_id": 3, "crop_id": 11, "variety_id": None, "grade_id": 5, "price_date": "2026-10-20",
+             "modal_price": 17.0, "min_price": 15.0, "max_price": 19.0}]
+    buf = io.BytesIO()
+    pq.write_table(pa.Table.from_pylist(rows), buf)
+    store = Store({"facts/daily/date=2026-10-20.parquet": buf.getvalue()})
+    got = pl.archive_rows(store, date(2026, 10, 29))
+    assert got == rows
+    out = build(got + [price(3, 11, TODAY, 18)])
+    item = out["live/mandi/mh.pune.pune.json"]["items"][0]
+    assert (item["prev_modal"], item["prev_date"]) == (17.0, "2026-10-20")
+    assert out["live/mandi/mh.pune.pune.json"]["recent_crops"] == ["tomato"]

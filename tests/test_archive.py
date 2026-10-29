@@ -245,6 +245,21 @@ def test_a_retry_that_still_fails_does_not_stop_the_run():
     assert ("archive", date(2026, 10, 7)) in log  # the window still runs
 
 
+def test_a_day_that_met_unknown_names_is_pulled_a_second_time():
+    pulls = []
+
+    def ingest(d):
+        pulls.append(d)
+        calls = 3 if len(pulls) == 1 else 0  # the first pass had to look names up; the second preloads them
+        return SimpleNamespace(final_status="SUCCESS", identity_stats={"variety_rpc_calls": calls, "mandi_rpc_calls": 0})
+
+    log, state = [], _State(next_end=date(2026, 10, 9))
+    deps = _deps(log)
+    deps["ingest_day"] = ingest
+    run_backward(today=date(2026, 10, 29), oldest=date(2026, 10, 9), state=state, max_windows=1, **deps)
+    assert pulls == [date(2026, 10, 9), date(2026, 10, 9)]
+
+
 def test_a_failed_delete_is_recorded_and_the_run_goes_on():
     log, state = [], _State(next_end=date(2026, 10, 18))
     deps = _deps(log)

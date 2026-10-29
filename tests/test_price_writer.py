@@ -99,10 +99,10 @@ class _FakeSelectClient:
     source, not that the fake replays real date filtering)."""
 
     def __init__(self, existing_rows: list[dict], max_rows: int = 1000):
-        self._existing_rows = existing_rows
+        self._existing_rows = [{"id": i, **r} for i, r in enumerate(existing_rows, 1)]
         self._max_rows = max_rows  # PostgREST returns at most this many rows per request
-        self._start = 0
-        self._end = max_rows - 1
+        self._after = 0
+        self._page = max_rows
 
     def table(self, name):
         assert name == "mandi_daily_prices"
@@ -117,12 +117,17 @@ class _FakeSelectClient:
     def order(self, *_args, **_kwargs):
         return self
 
-    def range(self, start, end):
-        self._start, self._end = start, min(end, start + self._max_rows - 1)
+    def gt(self, _col, value):
+        self._after = value
+        return self
+
+    def limit(self, n):
+        self._page = min(n, self._max_rows)
         return self
 
     def execute(self):
-        return FakeResponse(data=self._existing_rows[self._start : self._end + 1])
+        rows = [r for r in self._existing_rows if r["id"] > self._after]
+        return FakeResponse(data=rows[: self._page])
 
 
 def test_filter_rows_by_precedence_empty_input_short_circuits_without_query():
@@ -247,7 +252,10 @@ def test_filter_rows_by_precedence_wraps_query_failure_in_config_error():
         def order(self, *_a, **_k):
             return self
 
-        def range(self, *_a, **_k):
+        def gt(self, *_a, **_k):
+            return self
+
+        def limit(self, *_a, **_k):
             return self
 
         def execute(self):

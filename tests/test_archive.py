@@ -45,7 +45,8 @@ class _Db:
     """Pages of rows for one day, honouring .range()."""
 
     def __init__(self, rows):
-        self.rows, self._a, self._b = rows, 0, 999
+        self.rows = [{"id": i, **r} for i, r in enumerate(rows, 1)]
+        self._after, self._page = 0, 1000
 
     quarantine: list = []
 
@@ -62,13 +63,17 @@ class _Db:
     def order(self, *a, **k):
         return self
 
-    def range(self, a, b):
-        self._a, self._b = a, b
+    def gt(self, _col, value):
+        self._after = value
+        return self
+
+    def limit(self, n):
+        self._page = n
         return self
 
     def execute(self):
         rows = self.rows if self.name == "mandi_daily_prices" else self.quarantine
-        return FakeResponse(data=rows[self._a : self._b + 1])
+        return FakeResponse(data=[r for r in rows if r["id"] > self._after][: self._page])
 
 
 class _Store:

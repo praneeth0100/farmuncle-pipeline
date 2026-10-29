@@ -184,8 +184,8 @@ def test_first_window_sits_just_before_the_live_window_and_steps_backwards():
     log, state = [], _State()
     run_backward(today=date(2026, 10, 29), oldest=date(2026, 8, 1), state=state, max_windows=1, **_deps(log))
     days = [e[1] for e in log if e[0] == "ingest"]
-    assert days[0] == date(2026, 10, 18) and days[-1] == date(2026, 10, 9)   # newest first, 10 days
-    assert state.next_end == date(2026, 10, 8)                               # next window ends the day before
+    assert days[0] == date(2026, 10, 25) and days[-1] == date(2026, 10, 16)  # newest first, 10 days, 3 live days kept
+    assert state.next_end == date(2026, 10, 15)                              # next window ends the day before
 
 
 def test_window_order_is_ingest_then_reference_then_archive_and_delete_each_day():
@@ -194,8 +194,8 @@ def test_window_order_is_ingest_then_reference_then_archive_and_delete_each_day(
     kinds = [e[0] for e in log]
     assert kinds.index("reference") > max(i for i, k in enumerate(kinds) if k == "ingest")
     assert kinds[kinds.index("reference") + 1] == "archive"
-    assert ("delete", date(2026, 10, 18), date(2026, 10, 18)) in log  # each day is deleted right after its upload
-    assert log.index(("archive", date(2026, 10, 18))) < log.index(("delete", date(2026, 10, 18), date(2026, 10, 18)))
+    assert ("delete", date(2026, 10, 25), date(2026, 10, 25)) in log  # each day is deleted right after its upload
+    assert log.index(("archive", date(2026, 10, 25))) < log.index(("delete", date(2026, 10, 25), date(2026, 10, 25)))
 
 
 def test_a_failed_day_is_skipped_and_the_rest_of_the_window_is_archived_and_deleted():

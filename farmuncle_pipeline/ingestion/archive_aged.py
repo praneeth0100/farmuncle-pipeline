@@ -23,7 +23,7 @@ def main() -> None:
     store = R2Store.from_env()
     store.ensure_bucket()
     store.selfcheck()
-    raw = db.rpc("aged_price_dates", {"p_keep_days": 11}).execute().data or []
+    raw = db.rpc("aged_price_dates", {"p_keep_days": 4}).execute().data or []
     days = [date.fromisoformat(r if isinstance(r, str) else r["aged_price_dates"]) for r in raw]
     done = 0
     for day in days:  # one day failing (a timeout, a bad upload) is recorded and the next day still goes

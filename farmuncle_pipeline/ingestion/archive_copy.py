@@ -24,7 +24,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Copy FINAL warehouse days to R2 without deleting them.")
     # Default stays strictly inside the live window (delete_price_window refuses those days), so it never overlaps
     # a day archive_history / archive_aged may be re-pulling or deleting. An older --start is a deliberate one-off.
-    parser.add_argument("--start", default=(date.today() - timedelta(days=9)).isoformat())
+    parser.add_argument("--start", default=(date.today() - timedelta(days=2)).isoformat())
     parser.add_argument("--end", default="2999-12-31")
     args = parser.parse_args()
     start, end = date.fromisoformat(args.start), date.fromisoformat(args.end)

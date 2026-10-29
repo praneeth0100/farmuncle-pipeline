@@ -1,6 +1,6 @@
 name: archive_aged
 
-# Nightly: days that aged out of the warehouse's live window (older than 10 days, final) are exported
+# Nightly: days that aged out of the warehouse's live window (older than 3 days, final) are exported
 # to R2 as Parquet, verified, and deleted from the warehouse. Does nothing until the MANDI_R2_*
 # secrets exist.
 on:

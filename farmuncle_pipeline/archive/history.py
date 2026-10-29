@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 
 DEFAULT_OLDEST = date(2018, 1, 1)
+LIVE_DAYS = 3  # days kept in the warehouse for the app; keep equal to delete_price_window's guard
 
 
 @dataclass(frozen=True)
@@ -86,7 +87,7 @@ def _settle(days, *, ingest_day, archive_day, delete_window, refresh_reference, 
 
 def run_backward(
     *, today: date, oldest: date, state, ingest_day, archive_day, delete_window, refresh_reference,
-    after_window=None, max_windows: int | None = None, window_days: int = 10, live_days: int = 10,
+    after_window=None, max_windows: int | None = None, window_days: int = 10, live_days: int = LIVE_DAYS,
     budget_seconds: float | None = None, clock=time.monotonic, leftover_days=None, record=None,
 ) -> int:
     """Process windows until `oldest`, the window cap or the time budget. Returns windows completed.

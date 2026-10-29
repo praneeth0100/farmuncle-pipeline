@@ -237,13 +237,15 @@ def _fetch_state_codes(db) -> list[dict]:
 
 
 def main() -> None:
-    from farmuncle_pipeline.ingest_common import validate_startup
+    import os
+
+    from supabase import create_client
 
     if not R2Store.configured():
         print("[publish_live] MANDI_R2_* credentials are not set; nothing published.")
         return
     store = R2Store.from_env()
-    print(f"[publish_live] {publish(validate_startup().supabase, store)}")
+    print(f"[publish_live] {publish(create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_KEY"]), store)}")
 
 
 if __name__ == "__main__":

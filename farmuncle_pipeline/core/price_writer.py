@@ -371,7 +371,10 @@ def upsert_price_rows(
             total_upserted += len(chunk)
             continue
         except Exception as exc:
-            if not _is_row_level_error(exc):
+            # A timeout on the chunk does not say which row is at fault, so it is isolated row by row
+            # like a data error; each row that still fails is set aside alone and the rest is saved.
+            # Without batch_id/resource there is nowhere to set rows aside, so the error is raised.
+            if batch_id is None or resource is None:
                 raise ConfigError(
                     f"Failed to upsert mandi_daily_prices chunk (size={len(chunk)}): {exc}"
                 ) from exc
@@ -390,17 +393,14 @@ def upsert_price_rows(
                 _upsert(table, [row])
                 total_upserted += 1
             except Exception as row_exc:
-                if not _is_row_level_error(row_exc):
-                    raise ConfigError(
-                        f"Failed to upsert an individual mandi_daily_prices row during "
-                        f"isolation fallback: {row_exc}"
-                    ) from row_exc
+                # Only this row is set aside, whatever the error: a row that still fails after the
+                # retries is kept in quarantine (archived with the day), and the rest of the day goes on.
                 insert_data_quality_issue(
                     client,
                     batch_id=batch_id,
                     resource=resource,
                     row=row,
-                    error_code=getattr(row_exc, "code", None),
+                    error_code=getattr(row_exc, "code", None) or "DB-UPSERT-FAILED",
                     error_message=str(row_exc),
                 )
                 total_quarantined += 1

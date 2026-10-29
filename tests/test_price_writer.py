@@ -437,7 +437,7 @@ def test_upsert_price_rows_isolates_one_bad_row_keeps_the_rest():
     assert all(r["mandi_id"] != 999 for r in client.upserted_rows)
 
 
-def test_upsert_price_rows_transient_error_reraises_without_row_by_row_retry(monkeypatch):
+def test_upsert_price_rows_transient_error_without_a_batch_reraises(monkeypatch):
     monkeypatch.setattr("farmuncle_pipeline.core.price_writer.time.sleep", lambda _s: None)
     calls = []
 
@@ -449,12 +449,9 @@ def test_upsert_price_rows_transient_error_reraises_without_row_by_row_retry(mon
     rows = [_price_row(mandi_id=i) for i in range(3)]
 
     with pytest.raises(ConfigError):
-        upsert_price_rows(client, rows, batch_size=10, batch_id="batch-1", resource=Resource.RESOURCE_2)
+        upsert_price_rows(client, rows, batch_size=10)  # no batch_id/resource: nowhere to set rows aside
 
-    # The bulk chunk is retried (3 attempts) and then raised; a transient failure must
-    # NOT trigger the row-by-row fallback (that would add 3 more calls).
-    assert len(calls) == 3
-    assert all(len(payload) == 3 for payload in calls)
+    assert len(calls) == 3  # the bulk chunk, retried 3 times, then raised
 
 
 def test_wrong_order_prices_are_quarantined_before_the_bulk_call_not_via_row_by_row():
@@ -488,3 +485,22 @@ def test_upsert_price_rows_refuses_to_isolate_without_batch_id_and_resource():
         upsert_price_rows(client, rows, batch_size=10)  # no batch_id/resource
 
     assert client.quarantined == []
+
+
+def test_one_row_that_keeps_timing_out_is_set_aside_and_the_rest_of_the_day_is_saved(monkeypatch):
+    # Only the faulty row is skipped: a timeout on one row after its retries must not end the day.
+    monkeypatch.setattr("farmuncle_pipeline.core.price_writer.time.sleep", lambda _s: None)
+    good = [_price_row(mandi_id=i) for i in range(3)]
+    bad = _price_row(mandi_id=999)
+
+    def side_effect(payload):
+        if any(r.get("mandi_id") == 999 for r in payload):
+            raise FakeAPIError("read operation timed out", code="57014")
+
+    client = _FakeUpsertClient(chunk_side_effect=side_effect)
+    result = upsert_price_rows(client, good + [bad], batch_size=10, batch_id="batch-1", resource=Resource.RESOURCE_2)
+
+    assert result.rows_upserted == 3
+    assert result.rows_quarantined == 1
+    assert client.quarantined[0]["row_data"]["mandi_id"] == 999
+    assert client.quarantined[0]["error_code"] == "57014"

@@ -44,6 +44,9 @@ class R2Store:
     def put(self, key: str, data: bytes, content_type: str = "application/octet-stream") -> None:
         self._client.put_object(Bucket=self.bucket, Key=key, Body=data, ContentType=content_type)
 
+    def get(self, key: str) -> bytes:
+        return self._client.get_object(Bucket=self.bucket, Key=key)["Body"].read()
+
     def size(self, key: str) -> int:
         return int(self._client.head_object(Bucket=self.bucket, Key=key)["ContentLength"])
 

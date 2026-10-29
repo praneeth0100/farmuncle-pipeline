@@ -52,7 +52,7 @@ def _fetch_prices(db, since: date) -> list[dict]:
     while True:
         page = (db.table("mandi_daily_prices")
                 .select("id,mandi_id,crop_id,variety_id,grade_id,price_date,modal_price,min_price,max_price,created_at")
-                .gte("price_date", since.isoformat()).order("id").range(start, start + PAGE - 1).execute().data or [])
+                .gte("price_date", since.isoformat()).order("price_date").order("id").range(start, start + PAGE - 1).execute().data or [])
         rows.extend(page)
         if len(page) < PAGE:
             return rows
@@ -188,12 +188,14 @@ def _get_json(store, key: str):
 def publish(db, store, now: datetime | None = None) -> dict:
     now = now or datetime.now(IST)
     today = now.astimezone(IST).date()
+    print("[publish_live] reading the warehouse", flush=True)
     mandis = _fetch(db, "mandis", "id,public_id,state,status,merged_into_id")
     crops = _fetch(db, "crops", "id,name,merged_into_id")
     files = build_files(
         prices=_fetch_prices(db, today - timedelta(days=WINDOW_DAYS)), mandis=mandis, crops=crops,
         varieties=_fetch(db, "varieties", "id,crop_id,name"), grades=_fetch(db, "grades", "id,name"),
         registry=_get_json(store, SLUGS_KEY) or {}, today=today, now=now)
+    print(f"[publish_live] built {len(files) - 1} files", flush=True)
     registry = files.pop(SLUGS_KEY)
     hashes = _get_json(store, HASHES_KEY) or {}
     stamp = now.astimezone(IST).isoformat(timespec="seconds")

@@ -7,18 +7,21 @@ on:
     - cron: "5 * * * *"
   workflow_dispatch: {} # manual trigger, for testing/ops
 
-concurrency:
-  group: live-tick
+permissions:
+  contents: read
+  actions: write # the chain job starts the next hourly run
+
   # Do NOT cancel an in-progress run: a cancelled run is SIGKILLed before
   # its own except-block can close ingestion_batches out of RUNNING,
   # which would leave a stale row blocking every future run via the §12
   # concurrency guard. Queuing (not cancelling) is the safe choice —
   # by the time a queued run starts, the prior one has already closed
   # its batch, so there's no conflict left to hit anyway.
-  cancel-in-progress: false
-
 jobs:
   run:
+    concurrency:
+      group: live-tick
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 30 # §24 target is <5 min; generous margin before treating it as hung
     steps:
@@ -41,3 +44,24 @@ jobs:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: python -m farmuncle_pipeline.ingestion.live_tick
+
+  # GitHub's cron skipped many hourly runs, so each run also starts the next one at the coming :05 UTC.
+  # The cron above stays as a backup; if two chains exist, the older one sees a newer run and stops.
+  chain:
+    needs: run
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - name: Wait for the next :05 and start the next run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          now=$(date +%s)
+          next=$(( (now / 3600) * 3600 + 300 ))
+          if [ "$next" -le "$now" ]; then next=$(( next + 3600 )); fi
+          sleep $(( next - now ))
+          mine=$(gh run view "${{ github.run_id }}" --json createdAt --jq .createdAt)
+          newer=$(gh run list --workflow live_tick.yml --limit 20 --json databaseId,createdAt,status             --jq "[.[] | select(.createdAt > \"$mine\" and .status != \"completed\")] | length")
+          if [ "$newer" = "0" ]; then gh workflow run live_tick.yml --ref main; else echo "a newer run exists; chain ends here"; fi

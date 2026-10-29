@@ -243,3 +243,19 @@ def test_a_retry_that_still_fails_does_not_stop_the_run():
                  **_deps(log, fail_ingest_on=date(2026, 10, 12)))
     assert ("delete", date(2026, 10, 12), date(2026, 10, 12)) not in log
     assert ("archive", date(2026, 10, 7)) in log  # the window still runs
+
+
+def test_a_failed_delete_is_recorded_and_the_run_goes_on():
+    log, state = [], _State(next_end=date(2026, 10, 18))
+    deps = _deps(log)
+    real_delete = deps["delete_window"]
+
+    def delete(s, e):
+        if s == date(2026, 10, 12):
+            raise RuntimeError("canceling statement due to statement timeout")
+        real_delete(s, e)
+
+    deps["delete_window"] = delete
+    run_backward(today=date(2026, 10, 29), oldest=date(2026, 8, 1), state=state, max_windows=1, **deps)
+    assert ("delete", date(2026, 10, 13), date(2026, 10, 13)) in log  # the other days still go
+    assert state.next_end == date(2026, 10, 8)  # the window still advances

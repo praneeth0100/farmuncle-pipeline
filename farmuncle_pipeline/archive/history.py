@@ -36,13 +36,27 @@ def next_window(end: date, days: int = 10, oldest: date | None = None) -> Window
     return Window(start, end)
 
 
+def _pull(ingest_day, day):
+    """Pull a day; pull it once more if this pass met mandis/crops/varieties/grades the preload did not know.
+
+    22 and 23 Sep stored 2% fewer rows on the first pull (21,760 vs 22,230) than on the retry, with the same
+    24,042 records from the API. A pass that resolved names outside its preload may have merged rows, so the
+    second pass (which preloads them) decides what is archived.
+    """
+    result = ingest_day(day)
+    stats = getattr(result, "identity_stats", None) or {}
+    if any(v for k, v in stats.items() if k.endswith("_rpc_calls")):
+        result = ingest_day(day)
+    return result
+
+
 def _settle(days, *, ingest_day, archive_day, delete_window, refresh_reference) -> list[tuple[date, str]]:
     """Pull, verify and delete each day. A day that fails is skipped and returned; the rest go on."""
     ready: list[date] = []
     failed: list[tuple[date, str]] = []
     for day in days:
         try:
-            status = ingest_day(day).final_status
+            status = _pull(ingest_day, day).final_status
             if str(getattr(status, "value", status)) == "FAILED":
                 raise RuntimeError("ingest returned FAILED")
             ready.append(day)

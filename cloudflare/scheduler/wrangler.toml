@@ -1,0 +1,6 @@
+name = "farmuncle-scheduler"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+
+[triggers]
+crons = ["5 * * * *", "20 */3 * * *"]

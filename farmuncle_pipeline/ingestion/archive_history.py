@@ -15,6 +15,7 @@ from farmuncle_pipeline.archive.export import archive_day
 from farmuncle_pipeline.archive.history import DEFAULT_OLDEST, run_backward
 from farmuncle_pipeline.archive.state import SupabaseArchiveState
 from farmuncle_pipeline.archive.store import R2Store
+from farmuncle_pipeline.archive.tracker import record_day
 from farmuncle_pipeline.core.resource2_pipeline import ingest_resource2_for_date
 from farmuncle_pipeline.ingest_common import validate_startup
 
@@ -51,6 +52,7 @@ def main() -> None:
             date.fromisoformat(r if isinstance(r, str) else r["price_days_between"])
             for r in db.rpc("price_days_between", {"p_from": after.isoformat(), "p_to": up_to.isoformat()}).execute().data or []
         ],
+        record=lambda day, status, **kw: record_day(db, day, status, **kw),
         max_windows=args.max_windows,
         budget_seconds=args.budget_minutes * 60,
     )

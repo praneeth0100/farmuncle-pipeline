@@ -86,6 +86,9 @@ class _Store:
     def size(self, key):
         return len(self.objects[key]) + (1 if self.corrupt else 0)
 
+    def get(self, key):
+        return self.objects[key]
+
 
 def test_archive_day_uploads_parquet_and_manifest_and_verifies_size():
     rows = [_row(i) for i in range(2500)]  # more than one 1000-row page
@@ -94,6 +97,18 @@ def test_archive_day_uploads_parquet_and_manifest_and_verifies_size():
     assert result.rows == 2500
     assert pq.read_table(io.BytesIO(store.objects[day_key(date(2026, 10, 1))])).num_rows == 2500
     assert b'"rows": 2500' in store.objects[manifest_key(date(2026, 10, 1))]
+
+
+def test_archive_day_reads_the_row_count_back_from_the_stored_file():
+    result = archive_day(_Db([_row(i) for i in range(7)]), _Store(), date(2026, 10, 1))
+    assert result.r2_rows == 7
+
+
+def test_a_failed_read_back_is_recorded_as_unchecked_and_never_stops_the_day():
+    store = _Store()
+    store.get = lambda key: (_ for _ in ()).throw(RuntimeError("R2 unreachable"))
+    result = archive_day(_Db([_row(1)]), store, date(2026, 10, 1))
+    assert result.rows == 1 and result.r2_rows is None
 
 
 def test_archive_day_refuses_when_the_stored_size_does_not_match():
@@ -274,3 +289,19 @@ def test_a_failed_delete_is_recorded_and_the_run_goes_on():
     run_backward(today=date(2026, 10, 29), oldest=date(2026, 8, 1), state=state, max_windows=1, **deps)
     assert ("delete", date(2026, 10, 13), date(2026, 10, 13)) in log  # the other days still go
     assert state.next_end == date(2026, 10, 8)  # the window still advances
+
+
+def test_each_day_is_recorded_and_a_broken_recorder_changes_nothing():
+    seen, state = [], _State(next_end=date(2026, 10, 18))
+    log = []
+    run_backward(today=date(2026, 10, 29), oldest=date(2026, 8, 1), state=state, max_windows=1,
+                 record=lambda day, status, **kw: seen.append((day, status)), **_deps(log))
+    assert (date(2026, 10, 18), "DELETED") in seen and (date(2026, 10, 9), "DELETED") in seen
+
+    from farmuncle_pipeline.archive.tracker import record_day
+
+    class Broken:
+        def rpc(self, *a, **k):
+            raise RuntimeError("down")
+
+    record_day(Broken(), date(2026, 10, 18), "DELETED")  # prints, does not raise

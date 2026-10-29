@@ -48,14 +48,20 @@ def _settle(days, *, ingest_day, archive_day, delete_window, refresh_reference) 
             ready.append(day)
         except Exception as exc:
             failed.append((day, str(exc)))
-    refresh_reference()
+    try:
+        refresh_reference()
+    except Exception as exc:          # the reference numbers can wait; the days must not stop
+        print(f"[archive_history] reference refresh failed, continuing: {exc}")
     for day in ready:
         try:
             archive_day(day)          # raises ArchiveError unless the upload is verified
         except Exception as exc:
             failed.append((day, str(exc)))
             continue
-        delete_window(day, day)       # one day at a time, straight after its verified upload
+        try:
+            delete_window(day, day)   # one day at a time, straight after its verified upload
+        except Exception as exc:      # the upload is already verified; the day is retried next run
+            failed.append((day, f"uploaded, delete failed: {exc}"))
     return failed
 
 

@@ -1,0 +1,39 @@
+name: publish_analytics
+
+# Nightly, after archive_aged: series, history and insights JSON for the app, from the R2 archive plus the warehouse.
+# Reads only, so it has its own concurrency group and never blocks warehouse-writer.
+on:
+  workflow_run:
+    workflows: [archive_aged]
+    types: [completed]
+  workflow_dispatch: {}
+  push:
+    branches: [b4-analytics] # TEMP: first run from the PR branch; removed before merge
+
+concurrency:
+  group: publish-analytics
+  cancel-in-progress: false
+
+jobs:
+  run:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      - name: Publish analytics files
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          MANDI_R2_ACCOUNT_ID: ${{ secrets.MANDI_R2_ACCOUNT_ID }}
+          MANDI_R2_ACCESS_KEY_ID: ${{ secrets.MANDI_R2_ACCESS_KEY_ID }}
+          MANDI_R2_SECRET_ACCESS_KEY: ${{ secrets.MANDI_R2_SECRET_ACCESS_KEY }}
+          MANDI_R2_BUCKET: ${{ secrets.MANDI_R2_BUCKET }}
+        run: python -m farmuncle_pipeline.ingestion.publish_analytics

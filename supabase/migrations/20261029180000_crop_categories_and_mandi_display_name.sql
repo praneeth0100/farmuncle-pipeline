@@ -1,6 +1,6 @@
 -- Categories for the crops that had none (ids 202, 314-367), by crop name; unsure ones are 'Other'.
 -- 'Fibres' is folded into 'Fiber'. mandis.display_name holds the clean market name for the app
--- ("Bariwala", not "Bariwala APMC"); it is copied from the app DB by scripts/copy_display_names.py.
+-- ("Bariwala", not "Bariwala APMC"); it was filled once: the app DB's reviewed names where they exist, otherwise the name without a trailing "APMC".
 update crops set category = v.category
 from (values
     (202, 'Spices'), (314, 'Fruits'), (315, 'Other'), (316, 'Fruits'), (330, 'Vegetables'), (331, 'Vegetables'),

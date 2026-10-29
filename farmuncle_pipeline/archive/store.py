@@ -21,6 +21,7 @@ class R2Store:
     @classmethod
     def from_env(cls) -> "R2Store":
         import boto3
+        from botocore.config import Config
 
         client = boto3.client(
             "s3",
@@ -28,6 +29,7 @@ class R2Store:
             aws_access_key_id=os.environ["MANDI_R2_ACCESS_KEY_ID"],
             aws_secret_access_key=os.environ["MANDI_R2_SECRET_ACCESS_KEY"],
             region_name="auto",
+            config=Config(max_pool_connections=64),  # the publishers write from many threads
         )
         return cls(client, os.environ.get("MANDI_R2_BUCKET") or "agrouncle-mandi")
 
@@ -46,6 +48,15 @@ class R2Store:
 
     def get(self, key: str) -> bytes:
         return self._client.get_object(Bucket=self.bucket, Key=key)["Body"].read()
+
+    def list(self, prefix: str) -> list[str]:
+        keys, token = [], None
+        while True:
+            page = self._client.list_objects_v2(Bucket=self.bucket, Prefix=prefix, **({"ContinuationToken": token} if token else {}))
+            keys += [o["Key"] for o in page.get("Contents", [])]
+            token = page.get("NextContinuationToken")
+            if not token:
+                return keys
 
     def size(self, key: str) -> int:
         return int(self._client.head_object(Bucket=self.bucket, Key=key)["ContentLength"])

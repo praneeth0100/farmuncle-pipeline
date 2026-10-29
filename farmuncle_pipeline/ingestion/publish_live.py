@@ -93,33 +93,41 @@ def _price(value) -> float | None:
     return round(float(value), 2) if value is not None and float(value) > 0 else None
 
 
-def build_files(*, prices, mandis, crops, varieties, grades, registry, today: date, now: datetime) -> dict:
-    """Pure: warehouse rows in, {key: payload} out (live files only, plus the updated registry under SLUGS_KEY)."""
-    reg = assign_slugs(crops, varieties, registry)
+def make_key_fn(mandis, crops, reg):
+    """Row (warehouse or archive ids) -> (public_id, crop_slug, variety_id), or None when an id has no slug.
+    A merged mandi or crop resolves to its survivor."""
     crop_merge = {c["id"]: c["merged_into_id"] for c in crops if c.get("merged_into_id")}
     mandi_by_id = {m["id"]: m for m in mandis}
 
-    def survivor(mid):  # a merged mandi publishes under its survivor's id
-        m = mandi_by_id.get(mid)
+    def key_of(r):
+        m = mandi_by_id.get(r["mandi_id"])
         while m and m.get("merged_into_id") and m["merged_into_id"] in mandi_by_id:
             m = mandi_by_id[m["merged_into_id"]]
-        return m
+        cslug = reg["crops"].get(str(crop_merge.get(r["crop_id"], r["crop_id"])))
+        if not m or not cslug:
+            return None
+        vslug = reg["varieties"].get(str(r["variety_id"])) if r.get("variety_id") else None
+        return (m["public_id"], cslug, vslug or f"{cslug}.other")
 
+    return key_of
+
+
+def build_files(*, prices, mandis, crops, varieties, grades, registry, today: date, now: datetime) -> dict:
+    """Pure: warehouse rows in, {key: payload} out (live files only, plus the updated registry under SLUGS_KEY)."""
+    reg = assign_slugs(crops, varieties, registry)
+    key_of = make_key_fn(mandis, crops, reg)
     grade_name = {g["id"]: slugify(g["name"]) for g in grades}
     stamp = now.astimezone(IST).isoformat(timespec="seconds")
     # (public_id, crop, variety, grade) -> {date: row}
     series: dict[tuple, dict[str, dict]] = defaultdict(dict)
     crop_days: dict[str, dict[str, set]] = defaultdict(lambda: defaultdict(set))
     for r in prices:
-        m = survivor(r["mandi_id"])
-        cid = crop_merge.get(r["crop_id"], r["crop_id"])
-        cslug = reg["crops"].get(str(cid))
-        if not m or not cslug or _price(r["modal_price"]) is None:
+        k = key_of(r)
+        if not k or _price(r["modal_price"]) is None:
             continue
-        vslug = reg["varieties"].get(str(r["variety_id"])) if r.get("variety_id") else None
-        key = (m["public_id"], cslug, vslug or f"{cslug}.other", grade_name.get(r.get("grade_id")) or None)
+        key = (*k, grade_name.get(r.get("grade_id")) or None)
         series[key][r["price_date"]] = r
-        crop_days[m["public_id"]][r["price_date"]].add(cslug)
+        crop_days[k[0]][r["price_date"]].add(k[1])
 
     out: dict[str, dict] = {}
     items_by_mandi: dict[str, list] = defaultdict(list)
@@ -167,7 +175,7 @@ def build_catalogs(*, mandis, crops, varieties, codes: dict, registry: dict) -> 
     live = [m for m in mandis if m.get("status") == "ACTIVE" and not m.get("merged_into_id")]
     states = sorted(({"id": codes[s], "name": s} for s in {m["state"] for m in live} if s in codes), key=lambda s: s["id"])
     mandi_rows = [{
-        "id": m["public_id"], "name": m["name"], "district": ".".join(m["public_id"].split(".")[:2]),
+        "id": m["public_id"], "name": m.get("display_name") or m["name"], "district": ".".join(m["public_id"].split(".")[:2]),
         "state": codes.get(m["state"]) or m["public_id"].split(".")[0],
         "lat": m.get("latitude"), "lng": m.get("longitude"), "status": m.get("status"),
         "merged_into_id": pid.get(m.get("merged_into_id")), "names": {}  # shortcut: no translations in the warehouse yet
@@ -243,7 +251,7 @@ def publish(db, store, now: datetime | None = None) -> dict:
     now = now or datetime.now(IST)
     today = now.astimezone(IST).date()
     print("[publish_live] reading the warehouse", flush=True)
-    mandis = _fetch(db, "mandis", "id,public_id,name,state,status,merged_into_id,latitude,longitude")
+    mandis = _fetch(db, "mandis", "id,public_id,name,display_name,state,status,merged_into_id,latitude,longitude")
     crops = _fetch(db, "crops", "id,name,category,display_unit,status,merged_into_id")
     varieties = _fetch(db, "varieties", "id,crop_id,name,status,merged_into_id")
     codes = {r["state"]: r["code"] for r in _fetch_state_codes(db)}

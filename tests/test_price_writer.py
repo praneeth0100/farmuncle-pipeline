@@ -114,6 +114,9 @@ class _FakeSelectClient:
     def in_(self, *_args, **_kwargs):
         return self
 
+    def eq(self, *_args, **_kwargs):
+        return self
+
     def order(self, *_args, **_kwargs):
         return self
 
@@ -247,6 +250,9 @@ def test_filter_rows_by_precedence_wraps_query_failure_in_config_error():
             return self
 
         def in_(self, *_a, **_k):
+            return self
+
+        def eq(self, *_a, **_k):
             return self
 
         def order(self, *_a, **_k):

@@ -16,6 +16,7 @@ import gzip
 import hashlib
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
 
@@ -25,6 +26,7 @@ from farmuncle_pipeline.archive.store import R2Store
 IST = timezone(timedelta(hours=5, minutes=30))
 WINDOW_DAYS = 3  # the warehouse keeps 3 days; prev_modal can only look that far back
 RECENT_CROPS_DAYS = 14  # spec 6.2; shortcut: the warehouse only holds WINDOW_DAYS, so recent_crops covers those
+WRITERS = 16
 BUDGET = {"live/mandi/": 10_000, "live/crop/": 10_000}  # gzipped bytes, spec 6.7
 HASHES_KEY, MANIFEST_KEY, SLUGS_KEY, STATES_KEY = (
     "meta/live_hashes.json", "meta/manifest.json", "meta/crop_slugs.json", "catalog/states.json")
@@ -211,9 +213,9 @@ def publish(db, store, now: datetime | None = None) -> dict:
     encoded = {k: _encode(p) for k, p in changed.items()}
     for k, data in encoded.items():
         _check_budget(k, data)  # fail before writing anything
-    for k, data in encoded.items():
-        store.put(k, data, "application/json")
-        hashes[k] = content_hash(changed[k])
+    with ThreadPoolExecutor(WRITERS) as pool:  # one put is ~0.5 s; a first run writes ~1,500 files
+        list(pool.map(lambda kv: store.put(kv[0], kv[1], "application/json"), encoded.items()))
+    hashes.update({k: content_hash(changed[k]) for k in encoded})
 
     codes = {r["state"]: r["code"] for r in _fetch_state_codes(db)}
     active = {m["state"] for m in mandis if m.get("status") == "ACTIVE" and not m.get("merged_into_id")}

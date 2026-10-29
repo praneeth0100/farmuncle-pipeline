@@ -1,0 +1,42 @@
+name: publish_live
+
+# Writes the app's live JSON (live/mandi, live/crop, catalog/states, manifest) to R2 after each live_tick.
+# Reads the warehouse only, so it has its own concurrency group and never blocks warehouse-writer.
+on:
+  workflow_run:
+    workflows: [live_tick]
+    types: [completed]
+  workflow_dispatch: {}
+  push:
+    branches: [b4-publish-live] # TEMP: test run from the PR branch; removed before merge
+
+concurrency:
+  group: publish-live
+  cancel-in-progress: false
+
+jobs:
+  run:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      - name: Publish live files
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DATA_GOV_API_KEY: ${{ secrets.DATA_GOV_API_KEY }}
+          HISTORY_SUPABASE_URL: ${{ secrets.HISTORY_SUPABASE_URL }}
+          HISTORY_SUPABASE_SERVICE_KEY: ${{ secrets.HISTORY_SUPABASE_SERVICE_KEY }}
+          MANDI_R2_ACCOUNT_ID: ${{ secrets.MANDI_R2_ACCOUNT_ID }}
+          MANDI_R2_ACCESS_KEY_ID: ${{ secrets.MANDI_R2_ACCESS_KEY_ID }}
+          MANDI_R2_SECRET_ACCESS_KEY: ${{ secrets.MANDI_R2_SECRET_ACCESS_KEY }}
+          MANDI_R2_BUCKET: ${{ secrets.MANDI_R2_BUCKET }}
+        run: python -m farmuncle_pipeline.ingestion.publish_live

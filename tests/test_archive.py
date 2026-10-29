@@ -173,37 +173,38 @@ def test_first_window_sits_just_before_the_live_window_and_steps_backwards():
     assert state.next_end == date(2026, 10, 8)                               # next window ends the day before
 
 
-def test_window_order_is_ingest_then_reference_then_archive_then_delete():
+def test_window_order_is_ingest_then_reference_then_archive_and_delete_each_day():
     log, state = [], _State()
     run_backward(today=date(2026, 10, 29), oldest=date(2026, 8, 1), state=state, max_windows=1, **_deps(log))
     kinds = [e[0] for e in log]
     assert kinds.index("reference") > max(i for i, k in enumerate(kinds) if k == "ingest")
-    assert kinds.index("delete") > max(i for i, k in enumerate(kinds) if k == "archive")
-    assert log[-1] == ("delete", date(2026, 10, 9), date(2026, 10, 18))
+    assert kinds[kinds.index("reference") + 1] == "archive"
+    assert ("delete", date(2026, 10, 18), date(2026, 10, 18)) in log  # each day is deleted right after its upload
+    assert log.index(("archive", date(2026, 10, 18))) < log.index(("delete", date(2026, 10, 18), date(2026, 10, 18)))
 
 
-def test_a_failed_day_stops_the_window_without_archiving_or_deleting_or_advancing():
+def test_a_failed_day_is_skipped_and_the_rest_of_the_window_is_archived_and_deleted():
     log, state = [], _State(next_end=date(2026, 10, 18))
-    with pytest.raises(RuntimeError):
-        run_backward(today=date(2026, 10, 29), oldest=date(2026, 8, 1), state=state,
-                     **_deps(log, fail_ingest_on=date(2026, 10, 12)))
-    assert not any(e[0] in ("archive", "delete") for e in log)
-    assert state.next_end == date(2026, 10, 18)
+    run_backward(today=date(2026, 10, 29), oldest=date(2026, 8, 1), state=state,
+                 max_windows=1, **_deps(log, fail_ingest_on=date(2026, 10, 12)))
+    assert ("archive", date(2026, 10, 12)) not in log and ("delete", date(2026, 10, 12), date(2026, 10, 12)) not in log
+    assert ("archive", date(2026, 10, 18)) in log and ("delete", date(2026, 10, 18), date(2026, 10, 18)) in log
+    assert state.next_end == date(2026, 10, 8)  # the window still advances
 
 
-def test_an_archive_error_never_deletes_and_never_advances():
+def test_an_archive_error_keeps_that_day_and_moves_on_without_deleting_it():
     log, state = [], _State(next_end=date(2026, 10, 18))
-    with pytest.raises(ArchiveError):
-        run_backward(today=date(2026, 10, 29), oldest=date(2026, 8, 1), state=state, **_deps(log, fail_archive=True))
+    run_backward(today=date(2026, 10, 29), oldest=date(2026, 8, 1), state=state,
+                 max_windows=1, **_deps(log, fail_archive=True))
     assert not any(e[0] == "delete" for e in log)
-    assert state.next_end == date(2026, 10, 18)
+    assert state.next_end == date(2026, 10, 8)
 
 
 def test_stops_at_the_oldest_date_and_marks_done():
     log, state = [], _State(next_end=date(2026, 8, 5))
     run_backward(today=date(2026, 10, 29), oldest=date(2026, 8, 1), state=state, **_deps(log))
     deleted = [e for e in log if e[0] == "delete"]
-    assert deleted == [("delete", date(2026, 8, 1), date(2026, 8, 5))]  # last window is clipped to the oldest date
+    assert deleted == [("delete", date(2026, 8, d), date(2026, 8, d)) for d in range(5, 0, -1)]  # last window is clipped to the oldest date, one day at a time
     assert state.done
 
 

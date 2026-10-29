@@ -1,11 +1,8 @@
 name: publish_live
 
-# Writes the app's live JSON (live/mandi, live/crop, catalog/states, manifest) to R2 after each live_tick.
+# Writes the app's live JSON (live/mandi, live/crop, catalog, manifest) to R2. live_tick starts it right after each pull.
 # Reads the warehouse only, so it has its own concurrency group and never blocks warehouse-writer.
 on:
-  workflow_run:
-    workflows: [live_tick]
-    types: [completed]
   workflow_dispatch: {}
 
 concurrency:
@@ -14,7 +11,6 @@ concurrency:
 
 jobs:
   run:
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

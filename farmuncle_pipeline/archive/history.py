@@ -50,8 +50,9 @@ def _pull(ingest_day, day):
     return result
 
 
-def _settle(days, *, ingest_day, archive_day, delete_window, refresh_reference) -> list[tuple[date, str]]:
+def _settle(days, *, ingest_day, archive_day, delete_window, refresh_reference, record=None) -> list[tuple[date, str]]:
     """Pull, verify and delete each day. A day that fails is skipped and returned; the rest go on."""
+    record = record or (lambda *a, **k: None)  # bookkeeping only: it must never decide anything
     ready: list[date] = []
     failed: list[tuple[date, str]] = []
     for day in days:
@@ -62,27 +63,31 @@ def _settle(days, *, ingest_day, archive_day, delete_window, refresh_reference) 
             ready.append(day)
         except Exception as exc:
             failed.append((day, str(exc)))
+            record(day, "FAILED", error=str(exc))
     try:
         refresh_reference()
     except Exception as exc:          # the reference numbers can wait; the days must not stop
         print(f"[archive_history] reference refresh failed, continuing: {exc}")
     for day in ready:
         try:
-            archive_day(day)          # raises ArchiveError unless the upload is verified
+            archived = archive_day(day)   # raises ArchiveError unless the upload is verified
         except Exception as exc:
             failed.append((day, str(exc)))
+            record(day, "FAILED", error=str(exc))
             continue
         try:
             delete_window(day, day)   # one day at a time, straight after its verified upload
+            record(day, "DELETED", result=archived)
         except Exception as exc:      # the upload is already verified; the day is retried next run
             failed.append((day, f"uploaded, delete failed: {exc}"))
+            record(day, "ARCHIVED", result=archived, error=f"delete failed: {exc}")
     return failed
 
 
 def run_backward(
     *, today: date, oldest: date, state, ingest_day, archive_day, delete_window, refresh_reference,
     after_window=None, max_windows: int | None = None, window_days: int = 10, live_days: int = 10,
-    budget_seconds: float | None = None, clock=time.monotonic, leftover_days=None,
+    budget_seconds: float | None = None, clock=time.monotonic, leftover_days=None, record=None,
 ) -> int:
     """Process windows until `oldest`, the window cap or the time budget. Returns windows completed.
 
@@ -92,7 +97,7 @@ def run_backward(
     began = clock()
     done_count = 0
     settle = dict(ingest_day=ingest_day, archive_day=archive_day, delete_window=delete_window,
-                  refresh_reference=refresh_reference)
+                  refresh_reference=refresh_reference, record=record)
     frontier = state.get()
     if leftover_days and frontier:
         retry = sorted(leftover_days(frontier + timedelta(days=1), today - timedelta(days=live_days + 1)), reverse=True)

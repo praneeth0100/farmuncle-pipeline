@@ -26,6 +26,7 @@ class DayArchive:
     bytes: int
     sha256: str | None
     quarantined: int = 0
+    r2_rows: int | None = None  # rows read back from the stored file; None when the read-back could not run
 
 
 def day_key(day: date) -> str:
@@ -103,6 +104,17 @@ def _archive_quarantine(supabase, store, day: date) -> int:
     return len(rows)
 
 
+def _stored_rows(store, key: str) -> int | None:
+    """Row count of the file as R2 holds it. Record-only: a failed read-back returns None, it never stops the day."""
+    try:
+        import pyarrow.parquet as pq
+
+        return pq.ParquetFile(io.BytesIO(store.get(key))).metadata.num_rows
+    except Exception as exc:
+        print(f"[archive] read-back of {key} failed, not checked: {exc}")
+        return None
+
+
 def archive_day(supabase, store, day: date) -> DayArchive:
     """Upload the day's Parquet and a manifest; raise ArchiveError unless the stored size matches.
 
@@ -120,4 +132,7 @@ def archive_day(supabase, store, day: date) -> DayArchive:
     digest = hashlib.sha256(data).hexdigest()
     manifest = {"date": day.isoformat(), "rows": len(rows), "bytes": len(data), "sha256": digest, "key": key, "quarantined": quarantined}
     store.put(manifest_key(day), json.dumps(manifest, indent=1).encode(), "application/json")
-    return DayArchive(day, len(rows), len(data), digest, quarantined)
+    r2_rows = _stored_rows(store, key)
+    if r2_rows is not None and r2_rows != len(rows):
+        print(f"[archive] ROW COUNT MISMATCH {day}: sent {len(rows)}, R2 holds {r2_rows} (recorded, not stopping)")
+    return DayArchive(day, len(rows), len(data), digest, quarantined, r2_rows)

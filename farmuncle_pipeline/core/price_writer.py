@@ -57,6 +57,7 @@ Explicitly out of scope for this file:
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 from farmuncle_pipeline.config import ConfigError, Resource, Source
@@ -102,10 +103,29 @@ def price_rule_violation(row: dict) -> str | None:
         return None
     if modal <= 0:
         return "DQ-PRICE-NONPOSITIVE"
+    # Mirrors chk_prices_min_max. Caught here so one bad row does not push a whole 500-row chunk
+    # through the slow row-by-row fallback (hundreds of requests, minutes per day).
+    low, high = row.get("min_price"), row.get("max_price")
+    if low is not None and high is not None and not (low <= modal <= high):
+        return "DQ-PRICE-ORDER"
     # Under Re 1/kg is a placeholder, not a price (record_processor already keeps per-kg entries as is).
     if row.get("unit") == "kg" and modal < 1:
         return "DQ-PRICE-FLOOR"
     return None
+
+
+_TRANSIENT_ATTEMPTS = 3
+
+
+def _upsert(table, rows: list[dict]):
+    """Upsert, retrying transient failures (timeouts, resets); a row-level data error is raised at once."""
+    for attempt in range(1, _TRANSIENT_ATTEMPTS + 1):
+        try:
+            return table.upsert(rows, on_conflict=_ON_CONFLICT).execute()
+        except Exception as exc:
+            if _is_row_level_error(exc) or attempt == _TRANSIENT_ATTEMPTS:
+                raise
+            time.sleep(2 * attempt)
 
 
 @dataclass(frozen=True)
@@ -347,10 +367,7 @@ def upsert_price_rows(
             # dropped the same day, so this MUST include source_mandi_id or
             # every upsert call fails outright with "no unique or exclusion
             # constraint matching the ON CONFLICT specification".
-            table.upsert(
-                chunk,
-                on_conflict=_ON_CONFLICT,
-            ).execute()
+            _upsert(table, chunk)
             total_upserted += len(chunk)
             continue
         except Exception as exc:
@@ -370,10 +387,7 @@ def upsert_price_rows(
 
         for row in chunk:
             try:
-                table.upsert(
-                    [row],
-                    on_conflict=_ON_CONFLICT,
-                ).execute()
+                _upsert(table, [row])
                 total_upserted += 1
             except Exception as row_exc:
                 if not _is_row_level_error(row_exc):

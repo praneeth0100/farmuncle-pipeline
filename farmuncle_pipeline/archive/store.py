@@ -5,6 +5,11 @@ from __future__ import annotations
 import os
 
 
+def cache_seconds(key: str) -> int:
+    """Browser/CDN cache time for a JSON file (spec 2.3): manifest 60 s, live files 10 min, everything else 1 h."""
+    return 60 if key == "meta/manifest.json" else 600 if key.startswith("live/") else 3600
+
+
 class R2Store:
     def __init__(self, client, bucket: str) -> None:
         self._client = client
@@ -44,7 +49,8 @@ class R2Store:
             self._client.create_bucket(Bucket=self.bucket)
 
     def put(self, key: str, data: bytes, content_type: str = "application/octet-stream") -> None:
-        self._client.put_object(Bucket=self.bucket, Key=key, Body=data, ContentType=content_type)
+        extra = {"CacheControl": f"public, max-age={cache_seconds(key)}"} if content_type == "application/json" else {}
+        self._client.put_object(Bucket=self.bucket, Key=key, Body=data, ContentType=content_type, **extra)
 
     def get(self, key: str) -> bytes:
         return self._client.get_object(Bucket=self.bucket, Key=key)["Body"].read()

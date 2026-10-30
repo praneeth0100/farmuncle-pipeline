@@ -1,0 +1,32 @@
+name: sweep_duplicates
+
+# After the nightly publish: list possible duplicate mandis, crops and varieties for review. Never merges.
+on:
+  workflow_run:
+    workflows: [publish_analytics]
+    types: [completed]
+  workflow_dispatch: {}
+
+concurrency:
+  group: duplicate-sweep
+  cancel-in-progress: false
+
+jobs:
+  run:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      - name: Sweep for duplicates
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python -m farmuncle_pipeline.ops.sweep_duplicates

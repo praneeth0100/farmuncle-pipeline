@@ -305,3 +305,24 @@ def test_each_day_is_recorded_and_a_broken_recorder_changes_nothing():
             raise RuntimeError("down")
 
     record_day(Broken(), date(2026, 10, 18), "DELETED")  # prints, does not raise
+
+
+def test_failed_days_reads_the_days_the_tracker_holds_as_failed():
+    from farmuncle_pipeline.archive.tracker import failed_days
+
+    calls = []
+
+    class Query:
+        def __getattr__(self, name):
+            return lambda *a: (calls.append((name, *a)), self)[1]
+
+        def execute(self):
+            return SimpleNamespace(data=[{"day": "2026-05-12"}, {"day": "2026-05-13"}])
+
+    class Db:
+        def table(self, name):
+            calls.append(("table", name))
+            return Query()
+
+    assert failed_days(Db(), date(2026, 2, 1), date(2026, 10, 25)) == [date(2026, 5, 12), date(2026, 5, 13)]
+    assert ("eq", "status", "FAILED") in calls and ("gte", "day", "2026-02-01") in calls and ("lte", "day", "2026-10-25") in calls

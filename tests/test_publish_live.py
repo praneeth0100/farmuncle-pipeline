@@ -156,3 +156,11 @@ def test_archive_rows_fill_prev_and_recent_crops():
     item = out["live/mandi/mh.pune.pune.json"]["items"][0]
     assert (item["prev_modal"], item["prev_date"]) == (17.0, "2026-10-20")
     assert out["live/mandi/mh.pune.pune.json"]["recent_crops"] == ["tomato"]
+
+
+def test_merged_variety_resolves_to_its_survivor():
+    varieties = VARIETIES + [{"id": 101, "crop_id": 10, "name": "Red Onion", "status": "ACTIVE", "merged_into_id": 100}]
+    reg = pl.assign_slugs(CROPS, varieties, {})
+    key_of = pl.make_key_fn(MANDIS, CROPS, reg, varieties)
+    row = {"mandi_id": 1, "crop_id": 10, "variety_id": 101}
+    assert key_of(row) == key_of({**row, "variety_id": 100}) == ("ka.dharwad.hubli", "onion", "onion.red")

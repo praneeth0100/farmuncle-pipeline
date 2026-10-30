@@ -94,9 +94,10 @@ def _price(value) -> float | None:
     return round(float(value), 2) if value is not None and float(value) > 0 else None
 
 
-def make_key_fn(mandis, crops, reg):
+def make_key_fn(mandis, crops, reg, varieties=()):
     """Row (warehouse or archive ids) -> (public_id, crop_slug, variety_id), or None when an id has no slug.
-    A merged mandi or crop resolves to its survivor."""
+    A merged mandi, crop or variety resolves to its survivor."""
+    variety_merge = {v["id"]: v["merged_into_id"] for v in varieties if v.get("merged_into_id")}
     crop_merge = {c["id"]: c["merged_into_id"] for c in crops if c.get("merged_into_id")}
     mandi_by_id = {m["id"]: m for m in mandis}
 
@@ -107,7 +108,8 @@ def make_key_fn(mandis, crops, reg):
         cslug = reg["crops"].get(str(crop_merge.get(r["crop_id"], r["crop_id"])))
         if not m or not cslug:
             return None
-        vslug = reg["varieties"].get(str(r["variety_id"])) if r.get("variety_id") else None
+        vid = variety_merge.get(r["variety_id"], r["variety_id"]) if r.get("variety_id") else None
+        vslug = reg["varieties"].get(str(vid)) if vid else None
         return (m["public_id"], cslug, vslug or f"{cslug}.other")
 
     return key_of
@@ -116,7 +118,7 @@ def make_key_fn(mandis, crops, reg):
 def build_files(*, prices, mandis, crops, varieties, grades, registry, today: date, now: datetime) -> dict:
     """Pure: warehouse rows in, {key: payload} out (live files only, plus the updated registry under SLUGS_KEY)."""
     reg = assign_slugs(crops, varieties, registry)
-    key_of = make_key_fn(mandis, crops, reg)
+    key_of = make_key_fn(mandis, crops, reg, varieties)
     grade_name = {g["id"]: slugify(g["name"]) for g in grades}
     stamp = now.astimezone(IST).isoformat(timespec="seconds")
     # (public_id, crop, variety, grade) -> {date: row}

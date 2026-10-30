@@ -263,8 +263,9 @@ def publish(db, store, now: datetime | None = None) -> dict:
     print("[publish_analytics] loading", flush=True)
     mandis = _fetch(db, "mandis", "id,public_id,state,status,merged_into_id,latitude,longitude")
     crops = _fetch(db, "crops", "id,name,merged_into_id")
-    reg = assign_slugs(crops, _fetch(db, "varieties", "id,crop_id,name"), _get_json(store, SLUGS_KEY) or {})
-    key_of = make_key_fn(mandis, crops, reg)
+    varieties = _fetch(db, "varieties", "id,crop_id,name,merged_into_id")
+    reg = assign_slugs(crops, varieties, _get_json(store, SLUGS_KEY) or {})
+    key_of = make_key_fn(mandis, crops, reg, varieties)
     grade_name = {g["id"]: slugify(g["name"]) for g in _fetch(db, "grades", "id,name")}
     series: dict = defaultdict(dict)
     window_start = today - timedelta(days=WINDOW_DAYS)

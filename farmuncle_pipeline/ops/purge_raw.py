@@ -20,6 +20,8 @@ def main() -> None:
     ctx = validate_startup()
     deleted = ctx.supabase.rpc("purge_raw_price_entries", {"p_keep_days": args.keep_days}).execute().data
     print(f"[purge_raw] deleted {deleted} raw entries older than {args.keep_days} days")
+    superseded = ctx.supabase.rpc("purge_superseded_live_raw").execute().data
+    print(f"[purge_raw] deleted {superseded} live (Resource 1) raw entries for days Resource 2 has finalised")
 
 
 if __name__ == "__main__":

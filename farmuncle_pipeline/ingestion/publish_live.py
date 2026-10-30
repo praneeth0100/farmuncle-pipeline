@@ -27,6 +27,7 @@ IST = timezone(timedelta(hours=5, minutes=30))
 WINDOW_DAYS = 3  # the warehouse keeps 3 days; older days come from the R2 archive (read only)
 RECENT_CROPS_DAYS = 14  # spec 6.2; prev_modal and recent_crops look back this far
 WRITERS = 16
+CATALOG_BUMP_EVERY = timedelta(hours=24)
 BUDGET = {"live/mandi/": 10_000, "live/crop/": 10_000, "catalog/mandis.json": 250_000}  # gzipped bytes, spec 6.7
 HASHES_KEY, MANIFEST_KEY, SLUGS_KEY = "meta/live_hashes.json", "meta/manifest.json", "meta/crop_slugs.json"
 
@@ -247,6 +248,20 @@ def _get_json(store, key: str):
     return None if raw is None else json.loads(raw)
 
 
+def catalog_step(changed: bool, version: int, hashes: dict, now: datetime, first: bool) -> tuple[bool, int]:
+    """(write the catalog files?, version to publish). New mandis and crops appear all day while history is backfilled, so the
+    files follow every change but catalog_version, which makes the app refetch about 600 KB, moves at most once a day.
+    A change held back is remembered in hashes and bumped by the first run after the day is up."""
+    last = hashes.get("_catalog_bumped_at")
+    due = first or last is None or now - datetime.fromisoformat(last) >= CATALOG_BUMP_EVERY
+    pending = hashes.get("_catalog_pending") == "1"
+    bump = due and not first and (changed or pending)
+    if bump or first:
+        hashes["_catalog_bumped_at"] = now.isoformat()
+    hashes["_catalog_pending"] = "1" if (changed or pending) and not bump else "0"
+    return changed or bump, version + bump
+
+
 def publish(db, store, now: datetime | None = None) -> dict:
     now = now or datetime.now(IST)
     today = now.astimezone(IST).date()
@@ -283,8 +298,8 @@ def publish(db, store, now: datetime | None = None) -> dict:
     version = int(manifest.get("catalog_version") or 1)
     catalogs = build_catalogs(mandis=mandis, crops=crops, varieties=varieties, codes=codes, registry=registry)
     new = {k: content_hash(p) for k, p in catalogs.items()}
-    if any(hashes.get(k) != h for k, h in new.items()):
-        version += 1 if any(k in hashes for k in new) else 0  # the first publish keeps the manifest's version
+    write, version = catalog_step(any(hashes.get(k) != h for k, h in new.items()), version, hashes, now, first=not any(k in hashes for k in new))
+    if write:
         for k, p in catalogs.items():
             data = _encode({**p, "version": version})
             _check_budget(k, data)

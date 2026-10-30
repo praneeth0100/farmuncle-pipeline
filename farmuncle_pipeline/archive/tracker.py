@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 
 def record_day(db, day, status: str, *, result=None, error: str | None = None) -> None:
     try:
@@ -13,3 +15,10 @@ def record_day(db, day, status: str, *, result=None, error: str | None = None) -
         }).execute()
     except Exception as exc:
         print(f"[archive] could not record {day} as {status}: {exc}")
+
+
+def failed_days(db, after, up_to) -> list[date]:
+    """Days the tracker holds as FAILED. A day that failed before ingesting has no warehouse rows to find it by."""
+    rows = (db.table("archive_days").select("day").eq("status", "FAILED")
+            .gte("day", after.isoformat()).lte("day", up_to.isoformat()).execute().data or [])
+    return [date.fromisoformat(r["day"]) for r in rows]

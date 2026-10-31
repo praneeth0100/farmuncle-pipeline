@@ -14,6 +14,8 @@ import time
 from dataclasses import dataclass
 from datetime import date, timedelta
 
+from farmuncle_pipeline.archive.tracker import incomplete_reason
+
 DEFAULT_OLDEST = date(2018, 1, 1)
 MAX_FAILURES_IN_A_ROW = 3  # then the run stops for now; the days are in archive_days as FAILED and retried next run
 LIVE_DAYS = 3  # days kept in the warehouse for the app; keep equal to delete_price_window's guard
@@ -54,7 +56,7 @@ def _pull(ingest_day, day):
 
 
 def _settle(days, *, ingest_day, archive_day, delete_window, refresh_reference, record=None, has_unfinal_rows=None,
-            max_failures: int = MAX_FAILURES_IN_A_ROW) -> tuple[list[tuple[date, str]], bool]:
+            typical_rows: int | None = None, max_failures: int = MAX_FAILURES_IN_A_ROW) -> tuple[list[tuple[date, str]], bool]:
     """Pull, verify and delete one day at a time. A day that fails is skipped and returned; the rest go on.
 
     A day that fails to ingest or upload is cleared from the warehouse too and recorded as FAILED with the reason:
@@ -98,7 +100,8 @@ def _settle(days, *, ingest_day, archive_day, delete_window, refresh_reference, 
             return failed, True
         try:
             status = _pull(ingest_day, day).final_status
-            if str(getattr(status, "value", status)) == "FAILED":
+            status = str(getattr(status, "value", status))
+            if status == "FAILED":
                 raise RuntimeError("ingest returned FAILED")
         except Exception as exc:
             reason = f"ingest: {exc}{drop(day)}"
@@ -116,12 +119,19 @@ def _settle(days, *, ingest_day, archive_day, delete_window, refresh_reference, 
             reason = f"upload: {exc}{drop(day)}"
             fail(day, reason, error=reason)
             continue
+        # An incomplete day is still sent to R2 and cleared, but recorded as FAILED with why, so it is pulled again.
+        incomplete = incomplete_reason(archived.rows, typical_rows) or (
+            "partial pull: a state's pages failed or its total did not reconcile; archived as it is, pulled again on retry"
+            if status == "PARTIAL" else None)
         try:
             delete_window(day, day)   # straight after its verified upload
-            record(day, "DELETED", result=archived)
             streak = 0
+            if incomplete:
+                failed.append((day, incomplete))
+            record(day, "FAILED" if incomplete else "DELETED", result=archived, error=incomplete)
         except Exception as exc:      # the upload is already verified; the day is retried next run
-            fail(day, f"uploaded, delete failed: {exc}", "ARCHIVED", result=archived, error=f"delete failed: {exc}")
+            note = f"{incomplete}; delete failed: {exc}" if incomplete else f"delete failed: {exc}"
+            fail(day, f"uploaded, {note}", "ARCHIVED", result=archived, error=note)
     return failed, False
 
 
@@ -129,6 +139,7 @@ def run_backward(
     *, today: date, oldest: date, state, ingest_day, archive_day, delete_window, refresh_reference,
     after_window=None, max_windows: int | None = None, window_days: int = 10, live_days: int = LIVE_DAYS,
     budget_seconds: float | None = None, clock=time.monotonic, leftover_days=None, record=None, has_unfinal_rows=None,
+    typical_rows: int | None = None,
 ) -> int:
     """Process windows until `oldest`, the window cap or the time budget. Returns windows completed.
 
@@ -138,7 +149,7 @@ def run_backward(
     began = clock()
     done_count = 0
     settle = dict(ingest_day=ingest_day, archive_day=archive_day, delete_window=delete_window,
-                  refresh_reference=refresh_reference, record=record, has_unfinal_rows=has_unfinal_rows)
+                  refresh_reference=refresh_reference, record=record, has_unfinal_rows=has_unfinal_rows, typical_rows=typical_rows)
     frontier = state.get()
     if leftover_days and frontier:
         retry = sorted(leftover_days(frontier + timedelta(days=1), today - timedelta(days=live_days + 1)), reverse=True)

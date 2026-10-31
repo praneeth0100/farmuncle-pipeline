@@ -54,6 +54,8 @@ def main() -> None:
             *failed_days(db, after, up_to),
         }),
         record=lambda day, status, **kw: record_day(db, day, status, **kw),
+        has_unfinal_rows=lambda d: bool(db.table("mandi_daily_prices").select("id").eq("price_date", d.isoformat())
+                                        .neq("source", "resource_2").limit(1).execute().data),
         max_windows=args.max_windows,
         budget_seconds=args.budget_minutes * 60,
     )

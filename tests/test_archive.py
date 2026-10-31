@@ -379,3 +379,14 @@ def test_a_stopped_retry_does_not_stop_the_windows():
     run_backward(today=date(2026, 10, 29), oldest=date(2026, 8, 1), state=state, max_windows=1,
                  leftover_days=lambda after, up_to: [date(2026, 10, d) for d in (15, 14, 13, 12)], **deps)
     assert ("archive", date(2026, 10, 7)) in log  # the retry gave up after 3, the window still ran
+
+
+def test_a_failed_day_with_live_or_manual_rows_is_kept_in_the_warehouse():
+    log, state, recorded = [], _State(next_end=date(2026, 10, 18)), []
+    run_backward(today=date(2026, 10, 29), oldest=date(2026, 8, 1), state=state, max_windows=1,
+                 has_unfinal_rows=lambda d: d == date(2026, 10, 18),
+                 record=lambda day, status, **kw: recorded.append((day, status, kw.get("error"))),
+                 **_deps(log, fail_archive=True))
+    assert ("delete", date(2026, 10, 18), date(2026, 10, 18)) not in log  # kept: these rows cannot be pulled again
+    assert ("delete", date(2026, 10, 17), date(2026, 10, 17)) in log      # a day without them is cleared
+    assert "kept: the day has live or manual rows" in recorded[0][2]

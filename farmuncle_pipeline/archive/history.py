@@ -53,7 +53,7 @@ def _pull(ingest_day, day):
     return result
 
 
-def _settle(days, *, ingest_day, archive_day, delete_window, refresh_reference, record=None,
+def _settle(days, *, ingest_day, archive_day, delete_window, refresh_reference, record=None, has_unfinal_rows=None,
             max_failures: int = MAX_FAILURES_IN_A_ROW) -> tuple[list[tuple[date, str]], bool]:
     """Pull, verify and delete one day at a time. A day that fails is skipped and returned; the rest go on.
 
@@ -81,6 +81,8 @@ def _settle(days, *, ingest_day, archive_day, delete_window, refresh_reference, 
     def drop(day) -> str:
         """Clear what a failed day left in the warehouse (it is pulled again when retried), so it cannot pile up."""
         try:
+            if has_unfinal_rows and has_unfinal_rows(day):  # live or manual rows: Resource 2 cannot give them back
+                return "; warehouse rows kept: the day has live or manual rows"
             delete_window(day, day)
             return "; warehouse rows removed, pulled again on retry"
         except Exception as exc:
@@ -126,7 +128,7 @@ def _settle(days, *, ingest_day, archive_day, delete_window, refresh_reference, 
 def run_backward(
     *, today: date, oldest: date, state, ingest_day, archive_day, delete_window, refresh_reference,
     after_window=None, max_windows: int | None = None, window_days: int = 10, live_days: int = LIVE_DAYS,
-    budget_seconds: float | None = None, clock=time.monotonic, leftover_days=None, record=None,
+    budget_seconds: float | None = None, clock=time.monotonic, leftover_days=None, record=None, has_unfinal_rows=None,
 ) -> int:
     """Process windows until `oldest`, the window cap or the time budget. Returns windows completed.
 
@@ -136,7 +138,7 @@ def run_backward(
     began = clock()
     done_count = 0
     settle = dict(ingest_day=ingest_day, archive_day=archive_day, delete_window=delete_window,
-                  refresh_reference=refresh_reference, record=record)
+                  refresh_reference=refresh_reference, record=record, has_unfinal_rows=has_unfinal_rows)
     frontier = state.get()
     if leftover_days and frontier:
         retry = sorted(leftover_days(frontier + timedelta(days=1), today - timedelta(days=live_days + 1)), reverse=True)

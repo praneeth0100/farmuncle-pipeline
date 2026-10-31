@@ -57,6 +57,10 @@ def _settle(days, *, ingest_day, archive_day, delete_window, refresh_reference, 
             max_failures: int = MAX_FAILURES_IN_A_ROW) -> tuple[list[tuple[date, str]], bool]:
     """Pull, verify and delete one day at a time. A day that fails is skipped and returned; the rest go on.
 
+    A day that fails to ingest or upload is cleared from the warehouse too and recorded as FAILED with the reason:
+    this loop pulled it from Resource 2 itself, so nothing is lost, and failed days would otherwise pile up
+    (Jan 2026: ~350,000 rows). A retry pulls it again.
+
     One day at a time keeps the warehouse at most one extra day (~17,000 rows) deep, so a failing step leaves
     one day behind, not a whole window. After `max_failures` days in a row fail, the days not yet tried are
     recorded as FAILED (retried next run) and `stopped` is True: a database that times out on every day made
@@ -74,6 +78,14 @@ def _settle(days, *, ingest_day, archive_day, delete_window, refresh_reference, 
         failed.append((day, reason))
         record(day, status, **kw)
 
+    def drop(day) -> str:
+        """Clear what a failed day left in the warehouse (it is pulled again when retried), so it cannot pile up."""
+        try:
+            delete_window(day, day)
+            return "; warehouse rows removed, pulled again on retry"
+        except Exception as exc:
+            return f"; warehouse rows kept, cleanup delete failed: {exc}"
+
     for i, day in enumerate(days):
         if streak >= max_failures:
             reason = f"not tried: {max_failures} days in a row failed"
@@ -87,7 +99,8 @@ def _settle(days, *, ingest_day, archive_day, delete_window, refresh_reference, 
             if str(getattr(status, "value", status)) == "FAILED":
                 raise RuntimeError("ingest returned FAILED")
         except Exception as exc:
-            fail(day, str(exc), error=str(exc))
+            reason = f"ingest: {exc}{drop(day)}"
+            fail(day, reason, error=reason)
             continue
         if not refreshed:  # the reference numbers need one day in; they can wait, the days must not stop
             refreshed = True
@@ -98,7 +111,8 @@ def _settle(days, *, ingest_day, archive_day, delete_window, refresh_reference, 
         try:
             archived = archive_day(day)   # raises ArchiveError unless the upload is verified
         except Exception as exc:
-            fail(day, str(exc), error=str(exc))
+            reason = f"upload: {exc}{drop(day)}"
+            fail(day, reason, error=reason)
             continue
         try:
             delete_window(day, day)   # straight after its verified upload
@@ -127,7 +141,7 @@ def run_backward(
     if leftover_days and frontier:
         retry = sorted(leftover_days(frontier + timedelta(days=1), today - timedelta(days=live_days + 1)), reverse=True)
         for day, reason in _settle(retry, **settle)[0]:  # a stopped retry just moves on to the windows
-            print(f"[archive_history] retry: {day} still not archived, left in the warehouse: {reason}")
+            print(f"[archive_history] retry: {day} still not archived: {reason}")
     longest = 0.0  # a window that would overrun the budget is not started (the job timeout would kill it half-done)
     while not getattr(state, "done", False):
         if max_windows is not None and done_count >= max_windows:
@@ -147,7 +161,7 @@ def run_backward(
         if after_window:
             after_window(window)
         for day, reason in failed:
-            print(f"[archive_history] {day} not archived this run, left in the warehouse: {reason}")
+            print(f"[archive_history] {day} not archived this run: {reason}")
 
         previous_day = window.start - timedelta(days=1)
         state.set(previous_day, done=previous_day < oldest)

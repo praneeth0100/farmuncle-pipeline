@@ -15,7 +15,7 @@ from farmuncle_pipeline.archive.export import archive_day
 from farmuncle_pipeline.archive.history import DEFAULT_OLDEST, run_backward
 from farmuncle_pipeline.archive.state import SupabaseArchiveState
 from farmuncle_pipeline.archive.store import R2Store
-from farmuncle_pipeline.archive.tracker import failed_days, record_day
+from farmuncle_pipeline.archive.tracker import failed_days, record_day, typical_rows
 from farmuncle_pipeline.core.resource2_pipeline import ingest_resource2_for_date
 from farmuncle_pipeline.ingest_common import validate_startup
 
@@ -54,6 +54,7 @@ def main() -> None:
             *failed_days(db, after, up_to),
         }),
         record=lambda day, status, **kw: record_day(db, day, status, **kw),
+        typical_rows=typical_rows(db),
         has_unfinal_rows=lambda d: bool(db.table("mandi_daily_prices").select("id").eq("price_date", d.isoformat())
                                         .neq("source", "resource_2").limit(1).execute().data),
         max_windows=args.max_windows,

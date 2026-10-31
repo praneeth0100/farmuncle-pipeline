@@ -10,7 +10,7 @@ from datetime import date
 from farmuncle_pipeline.archive.catalog import export_catalog
 from farmuncle_pipeline.archive.export import archive_day
 from farmuncle_pipeline.archive.store import R2Store
-from farmuncle_pipeline.archive.tracker import record_day
+from farmuncle_pipeline.archive.tracker import incomplete_reason, record_day, typical_rows
 from farmuncle_pipeline.ingest_common import validate_startup
 
 
@@ -26,6 +26,7 @@ def main() -> None:
     raw = db.rpc("aged_price_dates", {"p_keep_days": 4}).execute().data or []
     days = [date.fromisoformat(r if isinstance(r, str) else r["aged_price_dates"]) for r in raw]
     done = 0
+    typical = typical_rows(db)
     for day in days:  # one day failing (a timeout, a bad upload) is recorded and the next day still goes
         try:
             result = archive_day(db, store, day)  # raises unless the upload is verified
@@ -39,7 +40,10 @@ def main() -> None:
             print(f"[archive_aged] {day} uploaded, delete failed (retried next night): {exc}")
             record_day(db, day, "ARCHIVED", result=result, error=f"delete failed: {exc}")
             continue
-        record_day(db, day, "DELETED", result=result)
+        incomplete = incomplete_reason(result.rows, typical)  # still archived and removed, but recorded to be pulled again
+        record_day(db, day, "FAILED" if incomplete else "DELETED", result=result, error=incomplete)
+        if incomplete:
+            print(f"[archive_aged] {day}: {incomplete}")
         done += 1
         print(f"[archive_aged] {day}: {result.rows} rows archived and removed from the warehouse")
     if done:

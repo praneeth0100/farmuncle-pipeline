@@ -343,7 +343,7 @@ def test_failed_days_reads_the_days_the_tracker_holds_as_failed():
             return Query()
 
     assert failed_days(Db(), date(2026, 2, 1), date(2026, 10, 25)) == [date(2026, 5, 12), date(2026, 5, 13)]
-    assert ("eq", "status", "FAILED") in calls and ("gte", "day", "2026-02-01") in calls and ("lte", "day", "2026-10-25") in calls
+    assert ("eq", "status", "FAILED") in calls and ("gte", "day", "2026-02-01") in calls and ("lte", "day", "2026-10-25") in calls and ("lt", "attempts", 5) in calls
 
 
 def _failing_ingest(log, bad):
@@ -402,3 +402,48 @@ def test_a_day_is_never_replaced_in_r2_by_fewer_rows():
     archive_day(_Db([_row(i) for i in range(2600)]), store, day)       # more rows (a retry that completed) is allowed
     assert pq.read_table(io.BytesIO(store.objects[day_key(day)])).num_rows == 2600
     archive_day(_Db([_row(i) for i in range(2600)]), store, day)       # the same rows again is allowed
+
+
+def test_incomplete_reason_flags_only_a_day_far_below_the_usual():
+    from farmuncle_pipeline.archive.tracker import incomplete_reason
+
+    assert incomplete_reason(500, 20000).startswith("incomplete: 500 rows, a normal day has about 20000")  # the June slivers
+    assert incomplete_reason(12000, 20000) is None  # a Sunday is about 60%
+    assert incomplete_reason(500, None) is None     # no usual to compare with: not judged by size
+
+
+def test_typical_rows_is_the_median_of_the_last_archived_days_and_none_when_unreadable():
+    from farmuncle_pipeline.archive.tracker import typical_rows
+
+    class Query:
+        def __getattr__(self, name):
+            return lambda *a, **k: self
+
+        def execute(self):
+            return SimpleNamespace(data=[{"rows_sent": n} for n in (21000, 475, 19000, 20000, 13000)])
+
+    class Db:
+        def table(self, name):
+            return Query()
+
+    assert typical_rows(Db()) == 19000
+    assert typical_rows(object()) is None
+
+
+def test_an_incomplete_day_is_still_sent_to_r2_and_cleared_but_recorded_as_failed_with_why():
+    log, state, recorded = [], _State(next_end=date(2026, 10, 18)), []
+    run_backward(today=date(2026, 10, 29), oldest=date(2026, 8, 1), state=state, max_windows=1, typical_rows=1000,
+                 record=lambda day, status, **kw: recorded.append((day, status, kw.get("error"))), **_deps(log))  # each day archives 10 rows
+    assert ("archive", date(2026, 10, 18)) in log and ("delete", date(2026, 10, 18), date(2026, 10, 18)) in log
+    assert recorded[0][1] == "FAILED" and recorded[0][2].startswith("incomplete: 10 rows, a normal day has about 1000")
+    assert state.next_end == date(2026, 10, 8)  # flagged days do not count towards the stop rule: the whole window ran
+
+
+def test_a_partial_pull_is_recorded_as_failed_but_still_archived():
+    log, state, recorded = [], _State(next_end=date(2026, 10, 18)), []
+    deps = _deps(log)
+    deps["ingest_day"] = lambda d: (log.append(("ingest", d)), SimpleNamespace(final_status="PARTIAL"))[1]
+    run_backward(today=date(2026, 10, 29), oldest=date(2026, 8, 1), state=state, max_windows=1,
+                 record=lambda day, status, **kw: recorded.append((day, status, kw.get("error"))), **deps)
+    assert ("archive", date(2026, 10, 18)) in log
+    assert recorded[0][1] == "FAILED" and recorded[0][2].startswith("partial pull")

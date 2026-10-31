@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 
 DEFAULT_OLDEST = date(2018, 1, 1)
+MAX_FAILURES_IN_A_ROW = 3  # then the run stops for now; the days are in archive_days as FAILED and retried next run
 LIVE_DAYS = 3  # days kept in the warehouse for the app; keep equal to delete_price_window's guard
 
 
@@ -52,23 +53,41 @@ def _pull(ingest_day, day):
     return result
 
 
-def _settle(days, *, ingest_day, archive_day, delete_window, refresh_reference, record=None) -> list[tuple[date, str]]:
+def _settle(days, *, ingest_day, archive_day, delete_window, refresh_reference, record=None,
+            max_failures: int = MAX_FAILURES_IN_A_ROW) -> tuple[list[tuple[date, str]], bool]:
     """Pull, verify and delete one day at a time. A day that fails is skipped and returned; the rest go on.
 
     One day at a time keeps the warehouse at most one extra day (~17,000 rows) deep, so a failing step leaves
-    one day behind, not a whole window.
+    one day behind, not a whole window. After `max_failures` days in a row fail, the days not yet tried are
+    recorded as FAILED (retried next run) and `stopped` is True: a database that times out on every day made
+    runs last 3 to 5 hours for nothing.
     """
     record = record or (lambda *a, **k: None)  # bookkeeping only: it must never decide anything
+    days = list(days)
     failed: list[tuple[date, str]] = []
     refreshed = False
-    for day in days:
+    streak = 0
+
+    def fail(day, reason, status="FAILED", **kw):
+        nonlocal streak
+        streak += 1
+        failed.append((day, reason))
+        record(day, status, **kw)
+
+    for i, day in enumerate(days):
+        if streak >= max_failures:
+            reason = f"not tried: {max_failures} days in a row failed"
+            for rest in days[i:]:
+                failed.append((rest, reason))
+                record(rest, "FAILED", error=reason)
+            print(f"[archive_history] stopping: {reason}")
+            return failed, True
         try:
             status = _pull(ingest_day, day).final_status
             if str(getattr(status, "value", status)) == "FAILED":
                 raise RuntimeError("ingest returned FAILED")
         except Exception as exc:
-            failed.append((day, str(exc)))
-            record(day, "FAILED", error=str(exc))
+            fail(day, str(exc), error=str(exc))
             continue
         if not refreshed:  # the reference numbers need one day in; they can wait, the days must not stop
             refreshed = True
@@ -79,16 +98,15 @@ def _settle(days, *, ingest_day, archive_day, delete_window, refresh_reference, 
         try:
             archived = archive_day(day)   # raises ArchiveError unless the upload is verified
         except Exception as exc:
-            failed.append((day, str(exc)))
-            record(day, "FAILED", error=str(exc))
+            fail(day, str(exc), error=str(exc))
             continue
         try:
             delete_window(day, day)   # straight after its verified upload
             record(day, "DELETED", result=archived)
+            streak = 0
         except Exception as exc:      # the upload is already verified; the day is retried next run
-            failed.append((day, f"uploaded, delete failed: {exc}"))
-            record(day, "ARCHIVED", result=archived, error=f"delete failed: {exc}")
-    return failed
+            fail(day, f"uploaded, delete failed: {exc}", "ARCHIVED", result=archived, error=f"delete failed: {exc}")
+    return failed, False
 
 
 def run_backward(
@@ -108,7 +126,7 @@ def run_backward(
     frontier = state.get()
     if leftover_days and frontier:
         retry = sorted(leftover_days(frontier + timedelta(days=1), today - timedelta(days=live_days + 1)), reverse=True)
-        for day, reason in _settle(retry, **settle):
+        for day, reason in _settle(retry, **settle)[0]:  # a stopped retry just moves on to the windows
             print(f"[archive_history] retry: {day} still not archived, left in the warehouse: {reason}")
     longest = 0.0  # a window that would overrun the budget is not started (the job timeout would kill it half-done)
     while not getattr(state, "done", False):
@@ -125,7 +143,7 @@ def run_backward(
 
         # A day that fails never stops the window: the others are archived and deleted. A failed day
         # stays in the warehouse (nothing is deleted without a verified upload) and is listed for retry.
-        failed = _settle(window.days(), **settle)
+        failed, stopped = _settle(window.days(), **settle)
         if after_window:
             after_window(window)
         for day, reason in failed:
@@ -133,6 +151,8 @@ def run_backward(
 
         previous_day = window.start - timedelta(days=1)
         state.set(previous_day, done=previous_day < oldest)
+        if stopped:  # not counted as completed: the workflow only chains the next run after a completed window
+            break
         done_count += 1
         longest = max(longest, clock() - window_began)
     return done_count

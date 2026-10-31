@@ -204,17 +204,33 @@ def test_a_failed_day_is_skipped_and_the_rest_of_the_window_is_archived_and_dele
     log, state = [], _State(next_end=date(2026, 10, 18))
     run_backward(today=date(2026, 10, 29), oldest=date(2026, 8, 1), state=state,
                  max_windows=1, **_deps(log, fail_ingest_on=date(2026, 10, 12)))
-    assert ("archive", date(2026, 10, 12)) not in log and ("delete", date(2026, 10, 12), date(2026, 10, 12)) not in log
+    assert ("archive", date(2026, 10, 12)) not in log  # never uploaded
+    assert ("delete", date(2026, 10, 12), date(2026, 10, 12)) in log  # but what the failed pull left is cleared
     assert ("archive", date(2026, 10, 18)) in log and ("delete", date(2026, 10, 18), date(2026, 10, 18)) in log
     assert state.next_end == date(2026, 10, 8)  # the window still advances
 
 
-def test_an_archive_error_keeps_that_day_and_moves_on_without_deleting_it():
-    log, state = [], _State(next_end=date(2026, 10, 18))
-    run_backward(today=date(2026, 10, 29), oldest=date(2026, 8, 1), state=state,
-                 max_windows=1, **_deps(log, fail_archive=True))
-    assert not any(e[0] == "delete" for e in log)
+def test_a_failed_upload_is_recorded_with_its_reason_and_the_day_is_cleared_from_the_warehouse():
+    log, state, recorded = [], _State(next_end=date(2026, 10, 18)), []
+    run_backward(today=date(2026, 10, 29), oldest=date(2026, 8, 1), state=state, max_windows=1,
+                 record=lambda day, status, **kw: recorded.append((day, status, kw.get("error"))),
+                 **_deps(log, fail_archive=True))
+    assert ("delete", date(2026, 10, 18), date(2026, 10, 18)) in log  # cleared, so a failed day cannot pile up
+    assert recorded[0][1] == "FAILED" and recorded[0][2].startswith("upload: boom") and "pulled again on retry" in recorded[0][2]
     assert state.next_end == date(2026, 10, 8)
+
+
+def test_a_failed_cleanup_delete_is_said_in_the_reason():
+    log, state, recorded = [], _State(next_end=date(2026, 10, 18)), []
+    deps = _deps(log, fail_archive=True)
+
+    def broken_delete(s, e):
+        raise RuntimeError("statement timeout")
+
+    deps["delete_window"] = broken_delete
+    run_backward(today=date(2026, 10, 29), oldest=date(2026, 8, 1), state=state, max_windows=1,
+                 record=lambda day, status, **kw: recorded.append((day, status, kw.get("error"))), **deps)
+    assert "warehouse rows kept, cleanup delete failed: statement timeout" in recorded[0][2]
 
 
 def test_stops_at_the_oldest_date_and_marks_done():
@@ -258,7 +274,7 @@ def test_a_retry_that_still_fails_does_not_stop_the_run():
     run_backward(today=date(2026, 10, 29), oldest=date(2026, 8, 1), state=state, max_windows=1,
                  leftover_days=lambda after, up_to: [date(2026, 10, 12)],
                  **_deps(log, fail_ingest_on=date(2026, 10, 12)))
-    assert ("delete", date(2026, 10, 12), date(2026, 10, 12)) not in log
+    assert ("archive", date(2026, 10, 12)) not in log
     assert ("archive", date(2026, 10, 7)) in log  # the window still runs
 
 
@@ -363,3 +379,14 @@ def test_a_stopped_retry_does_not_stop_the_windows():
     run_backward(today=date(2026, 10, 29), oldest=date(2026, 8, 1), state=state, max_windows=1,
                  leftover_days=lambda after, up_to: [date(2026, 10, d) for d in (15, 14, 13, 12)], **deps)
     assert ("archive", date(2026, 10, 7)) in log  # the retry gave up after 3, the window still ran
+
+
+def test_a_failed_day_with_live_or_manual_rows_is_kept_in_the_warehouse():
+    log, state, recorded = [], _State(next_end=date(2026, 10, 18)), []
+    run_backward(today=date(2026, 10, 29), oldest=date(2026, 8, 1), state=state, max_windows=1,
+                 has_unfinal_rows=lambda d: d == date(2026, 10, 18),
+                 record=lambda day, status, **kw: recorded.append((day, status, kw.get("error"))),
+                 **_deps(log, fail_archive=True))
+    assert ("delete", date(2026, 10, 18), date(2026, 10, 18)) not in log  # kept: these rows cannot be pulled again
+    assert ("delete", date(2026, 10, 17), date(2026, 10, 17)) in log      # a day without them is cleared
+    assert "kept: the day has live or manual rows" in recorded[0][2]

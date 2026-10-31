@@ -1,7 +1,8 @@
 """Fill history backwards: today -> 2018 in 10-day windows.
 
-Each window: ingest its days (Resource 2) into the warehouse, snapshot reference stats, then for each day
-export it to R2, verify it and delete that day from the warehouse. A day that fails is skipped and listed,
+Each window goes one day at a time: ingest the day (Resource 2) into the warehouse, export it to R2, verify it and
+delete that day, then the next. The reference stats are snapshotted once per window, after its first day is in.
+A day that fails is skipped and listed,
 and the rest of the window goes on; the window then advances. A skipped day stays in the warehouse
 (nothing is deleted without a verified upload).
 The latest `live_days` stay in the warehouse for the app; they are archived when they age out.
@@ -52,24 +53,29 @@ def _pull(ingest_day, day):
 
 
 def _settle(days, *, ingest_day, archive_day, delete_window, refresh_reference, record=None) -> list[tuple[date, str]]:
-    """Pull, verify and delete each day. A day that fails is skipped and returned; the rest go on."""
+    """Pull, verify and delete one day at a time. A day that fails is skipped and returned; the rest go on.
+
+    One day at a time keeps the warehouse at most one extra day (~17,000 rows) deep, so a failing step leaves
+    one day behind, not a whole window.
+    """
     record = record or (lambda *a, **k: None)  # bookkeeping only: it must never decide anything
-    ready: list[date] = []
     failed: list[tuple[date, str]] = []
+    refreshed = False
     for day in days:
         try:
             status = _pull(ingest_day, day).final_status
             if str(getattr(status, "value", status)) == "FAILED":
                 raise RuntimeError("ingest returned FAILED")
-            ready.append(day)
         except Exception as exc:
             failed.append((day, str(exc)))
             record(day, "FAILED", error=str(exc))
-    try:
-        refresh_reference()
-    except Exception as exc:          # the reference numbers can wait; the days must not stop
-        print(f"[archive_history] reference refresh failed, continuing: {exc}")
-    for day in ready:
+            continue
+        if not refreshed:  # the reference numbers need one day in; they can wait, the days must not stop
+            refreshed = True
+            try:
+                refresh_reference()
+            except Exception as exc:
+                print(f"[archive_history] reference refresh failed, continuing: {exc}")
         try:
             archived = archive_day(day)   # raises ArchiveError unless the upload is verified
         except Exception as exc:
@@ -77,7 +83,7 @@ def _settle(days, *, ingest_day, archive_day, delete_window, refresh_reference, 
             record(day, "FAILED", error=str(exc))
             continue
         try:
-            delete_window(day, day)   # one day at a time, straight after its verified upload
+            delete_window(day, day)   # straight after its verified upload
             record(day, "DELETED", result=archived)
         except Exception as exc:      # the upload is already verified; the day is retried next run
             failed.append((day, f"uploaded, delete failed: {exc}"))

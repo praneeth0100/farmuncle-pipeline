@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import io
 import sys
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -188,12 +188,14 @@ def test_first_window_sits_just_before_the_live_window_and_steps_backwards():
     assert state.next_end == date(2026, 10, 15)                              # next window ends the day before
 
 
-def test_window_order_is_ingest_then_reference_then_archive_and_delete_each_day():
+def test_each_day_is_ingested_archived_and_deleted_before_the_next_day_is_pulled():
     log, state = [], _State()
     run_backward(today=date(2026, 10, 29), oldest=date(2026, 8, 1), state=state, max_windows=1, **_deps(log))
     kinds = [e[0] for e in log]
-    assert kinds.index("reference") > max(i for i, k in enumerate(kinds) if k == "ingest")
-    assert kinds[kinds.index("reference") + 1] == "archive"
+    assert kinds[:5] == ["ingest", "reference", "archive", "delete", "ingest"]  # reference once, after the first day
+    assert kinds.count("reference") == 1
+    for day in (date(2026, 10, 25), date(2026, 10, 24)):
+        assert log.index(("delete", day, day)) < log.index(("ingest", day - timedelta(days=1)))
     assert ("delete", date(2026, 10, 25), date(2026, 10, 25)) in log  # each day is deleted right after its upload
     assert log.index(("archive", date(2026, 10, 25))) < log.index(("delete", date(2026, 10, 25), date(2026, 10, 25)))
 

@@ -390,3 +390,15 @@ def test_a_failed_day_with_live_or_manual_rows_is_kept_in_the_warehouse():
     assert ("delete", date(2026, 10, 18), date(2026, 10, 18)) not in log  # kept: these rows cannot be pulled again
     assert ("delete", date(2026, 10, 17), date(2026, 10, 17)) in log      # a day without them is cleared
     assert "kept: the day has live or manual rows" in recorded[0][2]
+
+
+def test_a_day_is_never_replaced_in_r2_by_fewer_rows():
+    store, day = _Store(), date(2026, 10, 1)
+    archive_day(_Db([_row(i) for i in range(2500)]), store, day)
+    full = store.objects[day_key(day)]
+    with pytest.raises(ArchiveError, match="not replacing it with less"):
+        archive_day(_Db([_row(i) for i in range(400)]), store, day)  # a failed pull left a sliver
+    assert store.objects[day_key(day)] == full                         # the full file is untouched
+    archive_day(_Db([_row(i) for i in range(2600)]), store, day)       # more rows (a retry that completed) is allowed
+    assert pq.read_table(io.BytesIO(store.objects[day_key(day)])).num_rows == 2600
+    archive_day(_Db([_row(i) for i in range(2600)]), store, day)       # the same rows again is allowed

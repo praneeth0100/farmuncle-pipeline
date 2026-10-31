@@ -115,8 +115,19 @@ def _stored_rows(store, key: str) -> int | None:
         return None
 
 
+def _archived_rows(store, day: date) -> int | None:
+    """Rows the day's manifest says R2 already holds; None when there is no manifest (or it cannot be read)."""
+    try:
+        return int(json.loads(store.get(manifest_key(day)))["rows"])
+    except Exception:
+        return None
+
+
 def archive_day(supabase, store, day: date) -> DayArchive:
     """Upload the day's Parquet and a manifest; raise ArchiveError unless the stored size matches.
+
+    Never replaces a day R2 already holds with fewer rows: a day left with a few hundred rows by a failed pull
+    was archived over its full file (2 to 27 June 2026: ~500 rows each instead of ~20,000).
 
     The day's quarantined rows go to R2 too, so deleting the window never loses a doubtful record.
     """
@@ -126,6 +137,9 @@ def archive_day(supabase, store, day: date) -> DayArchive:
         return DayArchive(day, 0, 0, None, quarantined)
     data = rows_to_parquet(rows)
     key = day_key(day)
+    held = _archived_rows(store, day)
+    if held is not None and held > len(rows):
+        raise ArchiveError(f"{key}: R2 already holds {held} rows for this day and the warehouse has {len(rows)}; not replacing it with less")
     store.put(key, data)
     if store.size(key) != len(data):
         raise ArchiveError(f"{key}: stored size does not match the {len(data)} bytes sent")

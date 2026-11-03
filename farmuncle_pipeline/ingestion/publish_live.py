@@ -207,8 +207,17 @@ def build_catalogs(*, mandis, crops, varieties, codes: dict, registry: dict) -> 
         crop_rows.append({"id": slug, "name": c["name"], "category": (c.get("category") or "").lower() or None,
                           "unit": "animal" if (c.get("display_unit") or "").lower() == "animal" else "kg",
                           "names": {}, "varieties": vs})
+    # Screen 2 reads one state's mandis (names and places) instead of the whole country's list.
+    by_state = defaultdict(list)
+    for row in mandi_rows:
+        if row["status"] == "ACTIVE" and not row["merged_into_id"]:
+            by_state[row["state"]].append({k: row[k] for k in ("id", "label", "district", "lat", "lng")} | ({"approx": True} if row["approx"] else {}))
+    for s in states:  # a state's centre: where the default state comes from for a farmer's shared location
+        placed = [(m["lat"], m["lng"]) for m in by_state.get(s["id"], []) if m["lat"] is not None]
+        s["lat"], s["lng"] = (round(sum(p[0] for p in placed) / len(placed), 4), round(sum(p[1] for p in placed) / len(placed), 4)) if placed else (None, None)
     return {"catalog/states.json": {"v": 1, "states": states}, "catalog/mandis.json": {"v": 1, "mandis": mandi_rows},
-            "catalog/crops.json": {"v": 1, "crops": crop_rows}}
+            "catalog/crops.json": {"v": 1, "crops": crop_rows},
+            **{f"catalog/state/{state}.json": {"v": 1, "state": state, "mandis": rows} for state, rows in by_state.items()}}
 
 
 def archive_rows(store, today: date) -> list[dict]:

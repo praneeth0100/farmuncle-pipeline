@@ -143,7 +143,8 @@ def test_publish_writes_changed_only_and_manifest():
 def test_catalogs_follow_contract():
     reg = pl.assign_slugs(CROPS, VARIETIES, {})
     cat = pl.build_catalogs(mandis=MANDIS, crops=CROPS, varieties=VARIETIES, codes={"Karnataka": "ka", "Maharashtra": "mh"}, registry=reg)
-    assert cat["catalog/states.json"]["states"] == [{"id": "ka", "name": "Karnataka"}, {"id": "mh", "name": "Maharashtra"}]
+    assert cat["catalog/states.json"]["states"] == [{"id": "ka", "name": "Karnataka", "lat": 15.36, "lng": 75.12},
+                                                    {"id": "mh", "name": "Maharashtra", "lat": 18.5, "lng": 73.8}]
     hubli, dup = cat["catalog/mandis.json"]["mandis"][:2]
     assert hubli == {"id": "ka.dharwad.hubli", "name": "Hubli", "district": "ka.dharwad", "state": "ka", "lat": 15.36,
                      "lng": 75.12, "status": "ACTIVE", "merged_into_id": None, "names": {}, "label": "Hubli", "approx": False}
@@ -268,3 +269,18 @@ def test_a_merged_mandi_gets_its_survivors_home_file():
     pl.publish(DB(PRICES), store, NOW, all_homes=True)
     dup = json.loads(store["home/ka.dharwad.hubli_dup.json"])
     assert dup["mandi_id"] == "ka.dharwad.hubli" and dup["crops"]
+
+
+def test_state_catalogs_list_active_mandis_with_places():
+    reg = pl.assign_slugs(CROPS, VARIETIES, {})
+    cat = pl.build_catalogs(mandis=MANDIS, crops=CROPS, varieties=VARIETIES, codes={"Karnataka": "ka", "Maharashtra": "mh"}, registry=reg)
+    ka = cat["catalog/state/ka.json"]
+    assert ka == {"v": 1, "state": "ka", "mandis": [{"id": "ka.dharwad.hubli", "label": "Hubli", "district": "ka.dharwad", "lat": 15.36, "lng": 75.12}]}
+    assert [s["lat"] for s in cat["catalog/states.json"]["states"]] == [15.36, 18.5]  # each state's centre
+
+
+def test_home_names_its_own_place():
+    store = Store()
+    pl.publish(DB(PRICES), store, NOW, all_homes=True)
+    hubli = json.loads(store["home/ka.dharwad.hubli.json"])
+    assert (hubli["lat"], hubli["lng"]) == (15.36, 75.12)

@@ -76,6 +76,7 @@ def build_home(*, homes, latest, neighbours, coords, labels, stats, odd, today: 
         ranked = sorted(crops.items(), key=lambda kv: (-(sum(n for n, _, _ in kv[1]) + 2 * any(a for _, _, a in kv[1])), kv[0]))
         out[f"home/{h}.json"] = {
             "v": 2, "mandi_id": h, "label": labels.get(h, h), "state": h.split(".")[0], "as_of": t, "updated_at": stamp,
+            "lat": coords.get(h, (None,))[0], "lng": coords.get(h, (None, None))[1],
             "stats_as_of": stats.get("as_of"),
             "mandis": {m: {"label": labels.get(m, m), "km": km, **({"approx": True} if coords.get(m, (0, 0, False))[2] else {})}
                        for m, km in used.items()},

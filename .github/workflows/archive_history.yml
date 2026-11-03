@@ -1,10 +1,10 @@
 name: archive_history
 
-# Fill price history backwards (newest window first, today -> 2018) in 10-day windows:
+# Fill price history backwards (newest window first, today -> Nov 2016) in 10-day windows:
 # ingest the window from Resource 2, export each day to R2 as Parquet, verify the upload,
 # delete the window from the warehouse, repeat. Resumes from archive_state, so a stopped or failed
 # run just continues. Does nothing until the MANDI_R2_* secrets exist.
-# Each run that finishes a window starts the next run itself, so the loop continues until 2018
+# Each run that finishes a window starts the next run itself, so the loop continues until Nov 2016
 # without waiting for the schedule. The schedule is a backstop in case a chained run fails.
 on:
   schedule:

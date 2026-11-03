@@ -1,45 +1,34 @@
-"""Nightly: build the chart and card files for the app from the R2 archive plus the warehouse window (spec 6.3 to 6.5, section 8).
+"""Nightly: chart files for the app and the price-change stats behind every card, from the R2 archive plus the warehouse.
 
-  series/{crop}/{mandi}/{variety}.json    last 365 days, daily
-  history/{crop}/{mandi}/{variety}.json   weekly, as far back as the archive goes (v 2)
-  insights/{crop}/{mandi}/{variety}.json  change, 52-week range, price position, seasonal index, nearby, outlook
+  chart/{crop}/{mandi}.json   every variety and grade at one mandi: daily for the last 365 days, weekly before that
+  meta/key_stats.json         per mandi|crop|variety|grade, the price about 7 days, 1 month, 6 months and 1 year back
+                              (read by publish_live for the home files; not read by the app)
 
-Reads facts/daily/*.parquet (read only). Writes only the three prefixes above, meta/analytics_hashes.json (the version
-of every file written, so unchanged files are skipped) and meta/manifest.json (only analytics_built_at).
-To stay inside R2's free 1M writes a month, only active keys (10+ report days in the last 90) get files, and a key's file
-is rewritten only on its own day: series every 3 days, history and insights every 7, staggered by a hash of the key so each
-night does a fraction. A key with no file yet is written at once. (Rewriting every changed file nightly was about 1.1M a month.)
-Blocks that need more history than the archive holds yet come out with available: false and fill in as it grows.
-
-shortcut: every loaded day of every key is held in memory (about 1.7M rows for 90 days). Fine to roughly one year;
-before loading several years, aggregate month by month instead.
+DuckDB reads facts/daily/*.parquet straight from R2 (read only) and does the heavy lifting, so years of history never
+sit in Python memory. Crop, variety and grade stay separate keys throughout. Only crop+mandi pairs with an active key
+(10+ report days in the last 90) get a chart, and a chart is written only when its content changed
+(meta/chart_hashes.json). meta/manifest.json gets analytics_built_at.
 """
 
 from __future__ import annotations
 
-import io
-import math
-import sys
-import zlib
-from collections import defaultdict
+import gzip
+import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
-from statistics import mean, median
 
 from farmuncle_pipeline.archive.store import R2Store
 from farmuncle_pipeline.ingestion.publish_live import (
-    IST, MANIFEST_KEY, SLUGS_KEY, _encode, _fetch, _fetch_prices, _get_bytes, _get_json, _price, assign_slugs,
-    content_hash, make_key_fn, slugify)
+    IST, MANIFEST_KEY, SLUGS_KEY, _encode, _fetch, _fetch_prices, _get_json, _price, assign_slugs, content_hash, slugify)
 
-HASHES_KEY = "meta/analytics_hashes.json"
-BUDGET = {"series/": 8_000, "history/": 12_000, "insights/": 3_000}  # gzipped bytes, spec 6.7
+CHART_HASHES_KEY = "meta/chart_hashes.json"
+STATS_KEY = "meta/key_stats.json"
+CHART_BUDGET = 80_000  # gzipped bytes
 WINDOW_DAYS = 3  # warehouse days; older days come from the archive
-MIN_HISTORY_WEEKS = 53  # the series already covers a year; history only adds value beyond it (and costs writes)
-NEARBY_KM = 100
-WORKERS = 48
-REFRESH_DAYS = {"series": 3, "history": 7, "insights": 7}
 ACTIVE_REPORTS, ACTIVE_DAYS = 10, 90
-COLS = ["mandi_id", "crop_id", "variety_id", "grade_id", "price_date", "modal_price", "min_price", "max_price"]
+WORKERS = 48
+# period -> (days back, slack): the latest report on or before that day, at most `slack` days earlier
+ANCHORS = {"7D": (7, 3), "1M": (30, 10), "6M": (182, 10), "1Y": (365, 10)}
 
 
 def archive_days(store) -> list[date]:
@@ -53,295 +42,181 @@ def warehouse_start(archived: list[date], today: date) -> date:
     return min(window, max(archived) + timedelta(days=1)) if archived else window
 
 
-def read_day(store, day: date) -> list[dict]:
-    import pyarrow.parquet as pq
+def id_maps(mandis, crops, varieties, grades, reg) -> dict[str, list[tuple]]:
+    """Warehouse ids -> published slugs, merges followed to the survivor (same rules as publish_live.make_key_fn)."""
+    by_id = {m["id"]: m for m in mandis}
 
-    raw = _get_bytes(store, f"facts/daily/date={day.isoformat()}.parquet")
-    return [] if raw is None else pq.read_table(io.BytesIO(raw), columns=COLS).to_pylist()
-
-
-def add_rows(series: dict, rows, key_of, grade_name: dict) -> None:
-    """series[(mandi, crop, variety)][date] = (rank, modal, min, max); one grade per day: FAQ first, else by grade name."""
-    for r in rows:
-        modal = _price(r["modal_price"])
-        k = key_of(r) if modal is not None else None
-        if k is None:
-            continue
-        g = grade_name.get(r.get("grade_id")) or ""
-        rank, d = (g != "faq", g), date.fromisoformat(r["price_date"])
-        cur = series[k].get(d)
-        if cur is None or rank <= cur[0]:
-            series[k][d] = (rank, modal, _price(r["min_price"]), _price(r["max_price"]))
+    def survivor(m):
+        while m.get("merged_into_id") and m["merged_into_id"] in by_id:
+            m = by_id[m["merged_into_id"]]
+        return m["public_id"]
+    crop_merge = {c["id"]: c["merged_into_id"] for c in crops if c.get("merged_into_id")}
+    variety_merge = {v["id"]: v["merged_into_id"] for v in varieties if v.get("merged_into_id")}
+    return {
+        "mandi_map": [(m["id"], survivor(m)) for m in mandis],
+        "crop_map": [(c["id"], s) for c in crops if (s := reg["crops"].get(str(crop_merge.get(c["id"], c["id"]))))],
+        "variety_map": [(v["id"], s) for v in varieties if (s := reg["varieties"].get(str(variety_merge.get(v["id"], v["id"]))))],
+        "grade_map": [(g["id"], slugify(g["name"])) for g in grades],
+    }
 
 
-def _r2(x):
-    return None if x is None else round(x, 2)
+def load(con, facts_glob: str | None, warehouse_rows: list[dict], maps: dict) -> date | None:
+    """Builds table prices(mandi, crop, variety, grade, d, modal, mn, mx): one row per key and day (same-day duplicates
+    averaged). Returns the newest day, or None when there is nothing."""
+    import pyarrow as pa
+
+    for name, rows in maps.items():
+        con.register(name, pa.table({"id": [r[0] for r in rows], "slug": [r[1] for r in rows]}))
+    cols = ["mandi_id", "crop_id", "variety_id", "grade_id", "price_date", "modal_price", "min_price", "max_price"]
+    wh = [{**{c: r.get(c) for c in cols[:5]}, "modal_price": _price(r["modal_price"]), "min_price": _price(r["min_price"]),
+           "max_price": _price(r["max_price"])} for r in warehouse_rows]
+    con.register("wh", pa.Table.from_pylist(wh, schema=pa.schema([
+        ("mandi_id", pa.int64()), ("crop_id", pa.int64()), ("variety_id", pa.int64()), ("grade_id", pa.int64()),
+        ("price_date", pa.string()), ("modal_price", pa.float64()), ("min_price", pa.float64()), ("max_price", pa.float64())])))
+    # Every archived day is read: a day both archived and still in the warehouse is the same rows, averaged away.
+    facts = f"SELECT {', '.join(cols)} FROM read_parquet('{facts_glob}', union_by_name = true) UNION ALL " if facts_glob else ""
+    con.execute(f"""
+        CREATE OR REPLACE TABLE prices AS
+        WITH raw AS ({facts} SELECT {', '.join(cols)} FROM wh)
+        SELECT m.slug AS mandi, c.slug AS crop, coalesce(v.slug, c.slug || '.other') AS variety, coalesce(g.slug, '') AS grade,
+               CAST(price_date AS DATE) AS d, round(avg(CAST(modal_price AS DOUBLE)), 2) AS modal,
+               round(avg(nullif(CAST(min_price AS DOUBLE), 0)), 2) AS mn, round(avg(nullif(CAST(max_price AS DOUBLE), 0)), 2) AS mx
+        FROM raw JOIN mandi_map m ON raw.mandi_id = m.id JOIN crop_map c ON raw.crop_id = c.id
+        LEFT JOIN variety_map v ON raw.variety_id = v.id LEFT JOIN grade_map g ON raw.grade_id = g.id
+        WHERE CAST(modal_price AS DOUBLE) > 0
+        GROUP BY ALL""")
+    return con.execute("SELECT max(d) FROM prices").fetchone()[0]
 
 
-def series_file(k, days: dict, end: date, stamp: str) -> dict | None:
-    ds = sorted(d for d in days if end - timedelta(days=364) <= d <= end)
-    if not ds:
-        return None
-    cols = ([], [], [])
-    for i in range((ds[-1] - ds[0]).days + 1):
-        v = days.get(ds[0] + timedelta(days=i))
-        for col, x in zip(cols, v[1:] if v else (None, None, None)):
-            col.append(x)
-    return {"v": 1, "crop_id": k[1], "mandi_id": k[0], "variety_id": k[2], "updated_at": stamp,
-            "start": ds[0].isoformat(), "modal": cols[0], "min": cols[1], "max": cols[2]}
+def charts(con, end: date, stamp: str):
+    """Yields (key, payload) per crop+mandi with an active key, lines sorted by variety then grade.
+    days: [offset from start, modal, min, max]; weeks: [weeks from weekly_start, average modal]."""
+    start = end - timedelta(days=364)
+    cur = con.execute("""
+        WITH groups AS (
+            SELECT DISTINCT crop, mandi FROM prices GROUP BY crop, mandi, variety, grade
+            HAVING count(*) FILTER (WHERE d > $end - INTERVAL 90 DAY) >= $reports),
+        p AS (SELECT * FROM prices JOIN groups USING (crop, mandi)),
+        daily AS (SELECT crop, mandi, variety, grade, list(struct_pack(d := d, p := modal, lo := mn, hi := mx) ORDER BY d) AS days
+                  FROM p WHERE d >= $start GROUP BY ALL),
+        weekly AS (SELECT crop, mandi, variety, grade, list(struct_pack(w := w, a := a) ORDER BY w) AS weeks
+                   FROM (SELECT crop, mandi, variety, grade, CAST(date_trunc('week', d) AS DATE) AS w, round(avg(modal), 2) AS a
+                         FROM p WHERE d < $start GROUP BY ALL) GROUP BY ALL)
+        SELECT crop, mandi, variety, grade, days, weeks FROM daily FULL JOIN weekly USING (crop, mandi, variety, grade)
+        ORDER BY crop, mandi, variety, grade""", {"end": end, "start": start, "reports": ACTIVE_REPORTS})
+    group, lines = None, []
+    while batch := cur.fetchmany(2000):
+        for crop, mandi, variety, grade, days, weeks in batch:
+            if group and group != (crop, mandi):
+                yield _chart(group, lines, start, stamp)
+                lines = []
+            group = (crop, mandi)
+            lines.append((variety, grade or None, days or [], weeks or []))
+    if group:
+        yield _chart(group, lines, start, stamp)
 
 
-def history_file(k, days: dict, stamp: str, min_weeks: int = MIN_HISTORY_WEEKS) -> dict | None:
-    weeks: dict[date, list] = {}
-    for d, (_, modal, mn, mx) in days.items():
-        y, w, _ = d.isocalendar()
-        a = weeks.setdefault(date.fromisocalendar(y, w, 1), [[], [], []])
-        a[0].append(modal)
-        if mn is not None:
-            a[1].append(mn)
-        if mx is not None:
-            a[2].append(mx)
-    first, last = min(weeks), max(weeks)
-    n = (last - first).days // 7 + 1
-    if n < min_weeks:
-        return None
-    avg, lo, hi = [], [], []
-    for i in range(n):
-        a = weeks.get(first + timedelta(weeks=i))
-        avg.append(_r2(mean(a[0])) if a else None)
-        lo.append(min(a[1]) if a and a[1] else None)
-        hi.append(max(a[2]) if a and a[2] else None)
-    y, w, _ = first.isocalendar()
-    return {"v": 2, "crop_id": k[1], "mandi_id": k[0], "variety_id": k[2], "updated_at": stamp,
-            "start_week": f"{y}-W{w:02d}", "avg": avg, "min": lo, "max": hi}
+def _chart(group, lines, start: date, stamp: str):
+    crop, mandi = group
+    first_week = min((w["w"] for _, _, _, weeks in lines for w in weeks), default=None)
+    payload = {
+        "v": 2, "crop": crop, "mandi_id": mandi, "updated_at": stamp, "start": start.isoformat(),
+        "lines": [{"variety": v, "grade": g, "days": [[(x["d"] - start).days, x["p"], x["lo"], x["hi"]] for x in days]}
+                  for v, g, days, _ in lines if days],
+        "weekly_start": first_week.isoformat() if first_week else None,
+        "weekly": [{"variety": v, "grade": g, "weeks": [[(x["w"] - first_week).days // 7, x["a"]] for x in weeks]}
+                   for v, g, _, weeks in lines if weeks]}
+    return f"chart/{crop}/{mandi}.json", payload
 
 
-def _pct(days: dict, end: date, span: int, back: int, need: int) -> int | None:
-    """Percent change of the mean modal over `span` days ending at `end` against the same span ending `back` days earlier."""
-    def window(e):
-        return [days[d][1] for d in (e - timedelta(days=i) for i in range(span)) if d in days]
-    now, before = window(end), window(end - timedelta(days=back))
-    if len(now) < need or len(before) < need:
-        return None
-    return round((mean(now) / mean(before) - 1) * 100)
+def key_stats(con, end: date) -> dict:
+    """{"as_of", "keys": {"mandi|crop|variety|grade": {"7D": [price, date], ...}}} for keys reported in the last 14 days.
+    A period is missing when nothing was reported near its day (never a made-up number)."""
+    picks = ", ".join(
+        f"max_by(struct_pack(p := modal, d := d), d) FILTER (WHERE d BETWEEN $end - INTERVAL {n + slack} DAY "
+        f"AND $end - INTERVAL {n} DAY) AS \"{period}\"" for period, (n, slack) in ANCHORS.items())
+    rows = con.execute(f"""
+        SELECT mandi, crop, variety, grade, {picks} FROM prices WHERE d >= $end - INTERVAL 380 DAY
+        GROUP BY ALL HAVING max(d) >= $end - INTERVAL 14 DAY""", {"end": end}).fetchall()
+    keys = {}
+    for mandi, crop, variety, grade, *found in rows:
+        keys[f"{mandi}|{crop}|{variety}|{grade}"] = {p: [f["p"], f["d"].isoformat()] for p, f in zip(ANCHORS, found) if f}
+    return {"v": 1, "as_of": end.isoformat(), "keys": keys}
 
 
-def monthly_ratios(days: dict, before_year: int) -> dict[int, dict[int, float]]:
-    """{year: {month: month median / that year's median}} for the years before `before_year`."""
-    by = defaultdict(lambda: defaultdict(list))
-    for d, v in days.items():
-        if d.year < before_year:
-            by[d.year][d.month].append(v[1])
-    out = {}
-    for y, months in by.items():
-        ymed = median([x for m in months.values() for x in m])
-        out[y] = {m: median(v) / ymed for m, v in months.items()}
-    return out
+def _fit(key: str, payload: dict) -> bytes | None:
+    """The chart as bytes within budget: weekly history is dropped first; None when even that is too big."""
+    for candidate in (payload, {**payload, "weekly_start": None, "weekly": []}):
+        data = _encode(candidate)
+        if len(gzip.compress(data)) <= CHART_BUDGET:
+            return data
+    print(f"[publish_analytics] {key} is over {CHART_BUDGET} bytes gzipped even without weekly history; skipped")
+    return None
 
 
-def seasonal_index(ratios: dict) -> list | None:
-    years = [r for r in ratios.values() if len(r) >= 8]  # a year counts when at least 8 months were reported
-    if len(years) < 3:
-        return None
-    idx = [[r[m] for r in years if m in r] for m in range(1, 13)]
-    return None if any(not x for x in idx) else [round(median(x), 2) for x in idx]
+def _r2_glob(con) -> str:
+    con.execute("INSTALL httpfs; LOAD httpfs;")
+    con.execute(f"CREATE SECRET r2 (TYPE r2, KEY_ID '{os.environ['MANDI_R2_ACCESS_KEY_ID']}', "
+                f"SECRET '{os.environ['MANDI_R2_SECRET_ACCESS_KEY']}', ACCOUNT_ID '{os.environ['MANDI_R2_ACCOUNT_ID']}')")
+    return f"r2://{os.environ.get('MANDI_R2_BUCKET') or 'agrouncle-mandi'}/facts/daily/*.parquet"
 
 
-def _index_at(idx: list, d: date) -> float:
-    """Monthly index interpolated to a day (each month's value sits at its middle)."""
-    dim = ((d.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)).day
-    pos = d.month - 1 + (d.day - 0.5) / dim - 0.5
-    i, frac = math.floor(pos), pos - math.floor(pos)
-    return idx[i % 12] * (1 - frac) + idx[(i + 1) % 12] * frac
+def publish(db, store, now: datetime | None = None, facts_glob: str | None = None) -> dict:
+    import duckdb
 
-
-def _direction(mid: float, base: float) -> str:
-    return "up" if mid >= base * 1.03 else "down" if mid <= base * 0.97 else "flat"
-
-
-def outlook(days: dict, end: date, idx: list | None) -> dict:
-    """Spec 8.6: seasonal baseline 14 days ahead, band and hit rate from weekly backtests."""
-    def base_at(d):
-        v = [days[x][1] for x in (d - timedelta(days=i) for i in range(7)) if x in days]
-        return mean(v) if v else None
-    base = base_at(end)
-    if idx is None or base is None:
-        return {"available": False}
-    ratios, hits = [], []
-    d = min(days) + timedelta(days=6)
-    while d + timedelta(days=14) <= end:
-        b, actual = base_at(d), days.get(d + timedelta(days=14))
-        if b is not None and actual is not None:
-            pred = b * _index_at(idx, d + timedelta(days=14)) / _index_at(idx, d)
-            ratios.append(actual[1] / pred)
-            hits.append(_direction(pred, b) == _direction(actual[1], b))
-        d += timedelta(days=7)
-    if len(ratios) < 20:
-        return {"available": False}
-    mid = base * _index_at(idx, end + timedelta(days=14)) / _index_at(idx, end)
-    rs = sorted(ratios)
-    low, high = mid * rs[int(0.1 * (len(rs) - 1))], mid * rs[int(math.ceil(0.9 * (len(rs) - 1)))]
-    hit = sum(hits[-20:]) / 20
-    width = (high - low) / mid
-    conf = "high" if hit >= 0.7 and width <= 0.2 else "low" if hit < 0.55 or width > 0.4 else "medium"
-    return {"available": True, "horizon_days": 14, "direction": _direction(mid, base), "low": _r2(low), "mid": _r2(mid),
-            "high": _r2(high), "confidence": conf, "hit_rate": round(hit, 2), "backtests": len(ratios)}
-
-
-def _km(a, b) -> float:
-    la1, lo1, la2, lo2 = map(math.radians, (a[0], a[1], b[0], b[1]))
-    h = math.sin((la2 - la1) / 2) ** 2 + math.cos(la1) * math.cos(la2) * math.sin((lo2 - lo1) / 2) ** 2
-    return 12742 * math.asin(math.sqrt(h))
-
-
-def nearby(k, coords: dict, recent: dict) -> list:
-    """Spec 8.4: mandis within 100 km that reported the same variety (else the same crop) in the last 3 days; top 5 by price."""
-    here = coords.get(k[0])
-    if here is None:
-        return []
-    near = [(m, v, modal, d, km) for m, v, modal, d in recent.get(k[1], ()) if m != k[0] and m in coords
-            and (km := _km(here, coords[m])) <= NEARBY_KM]
-    near = [n for n in near if n[1] == k[2]] or near
-    near.sort(key=lambda n: -n[2])
-    return [{"mandi_id": m, "km": round(km), "modal": modal, "date": d.isoformat()} for m, _, modal, d, km in near[:5]]
-
-
-def insights_file(k, days: dict, end: date, coords: dict, recent: dict, stamp: str) -> dict | None:
-    year = [d for d in days if end - timedelta(days=364) <= d <= end]
-    if not year:
-        return None
-    last = max(year)
-    last_price = days[last][1]
-    prev = max((d for d in days if d < last and (last - d).days <= 7), default=None)
-    out = {"v": 1, "crop_id": k[1], "mandi_id": k[0], "variety_id": k[2], "updated_at": stamp, "as_of": last.isoformat(),
-           "last_price": last_price,
-           "change": {"d1": _r2(last_price - days[prev][1]) if prev else None, "d7_pct": _pct(days, last, 7, 7, 3),
-                      "d30_pct": _pct(days, last, 30, 30, 10), "d180_pct": _pct(days, last, 30, 180, 10),
-                      "d365_pct": _pct(days, last, 30, 365, 10)}}  # d180/d365 compare 30-day means (spec 16 names, no formula)
-    covered = (max(year) - min(year)).days >= 300
-    lo, hi = min(year, key=lambda d: days[d][1]), max(year, key=lambda d: days[d][1])
-    out["range_52w"] = ({"available": True, "low": days[lo][1], "low_date": lo.isoformat(), "high": days[hi][1],
-                         "high_date": hi.isoformat()} if covered else {"available": False})
-    ratios = monthly_ratios(days, last.year)
-    past = [r[last.month] for y, r in ratios.items() if y >= last.year - 10 and last.month in r]
-    today_ratio = last_price / median(days[d][1] for d in year)
-    if len(past) >= 3:
-        lower = sum(r < today_ratio for r in past)
-        share = lower / len(past)
-        out["price_position"] = {"available": True, "month": last.month, "years_compared": len(past), "years_lower": lower,
-                                 "label": "high" if share >= 0.7 else "low" if share <= 0.3 else "normal"}
-    else:
-        out["price_position"] = {"available": False}
-    idx = seasonal_index(ratios)
-    if idx:
-        ranked = sorted(range(12), key=lambda m: idx[m])
-        out["seasonal"] = {"available": True, "years_used": sum(len(r) >= 8 for r in ratios.values()), "index": idx,
-                           "best_months": [m + 1 for m in ranked[:-3:-1]], "worst_months": [m + 1 for m in ranked[:2]]}
-    else:
-        out["seasonal"] = {"available": False}
-    out["nearby"] = nearby(k, coords, recent)
-    out["outlook"] = outlook(days, last, idx)
-    out["quality"] = {"report_days_90": sum(1 for d in days if last - timedelta(days=89) <= d <= last),
-                      "last_report": last.isoformat()}
-    return out
-
-
-def is_active(days: dict, end: date) -> bool:
-    return sum(1 for d in days if (end - d).days < ACTIVE_DAYS) >= ACTIVE_REPORTS
-
-
-def due(prefix: str, key: str, hashes: dict, today: date) -> bool:
-    """Never written, or this is the key's refresh day (a stable slot from a hash of the key)."""
-    n = REFRESH_DAYS[prefix]
-    return key not in hashes or today.toordinal() % n == zlib.crc32(key.encode()) % n
-
-
-def _check_budget(key: str, data: bytes) -> None:
-    import gzip
-
-    for prefix, limit in BUDGET.items():
-        if key.startswith(prefix) and len(gzip.compress(data)) > limit:
-            raise RuntimeError(f"{key} is over the {limit} byte gzip budget")
-
-
-def publish(db, store, now: datetime | None = None) -> dict:
     now = now or datetime.now(IST)
     today = now.astimezone(IST).date()
     stamp = now.astimezone(IST).isoformat(timespec="seconds")
     print("[publish_analytics] loading", flush=True)
-    mandis = _fetch(db, "mandis", "id,public_id,state,status,merged_into_id,latitude,longitude")
+    mandis = _fetch(db, "mandis", "id,public_id,merged_into_id")
     crops = _fetch(db, "crops", "id,name,merged_into_id")
     varieties = _fetch(db, "varieties", "id,crop_id,name,merged_into_id")
     reg = assign_slugs(crops, varieties, _get_json(store, SLUGS_KEY) or {})
-    key_of = make_key_fn(mandis, crops, reg, varieties)
-    grade_name = {g["id"]: slugify(g["name"]) for g in _fetch(db, "grades", "id,name")}
-    series: dict = defaultdict(dict)
+    maps = id_maps(mandis, crops, varieties, _fetch(db, "grades", "id,name"), reg)
     archived = archive_days(store)
     window_start = warehouse_start(archived, today)
-    old = [d for d in archived if d < window_start]
-    with ThreadPoolExecutor(16) as pool:
-        for i in range(0, len(old), 32):  # a batch at a time keeps the raw rows from piling up
-            for rows in pool.map(lambda d: read_day(store, d), old[i:i + 32]):
-                add_rows(series, rows, key_of, grade_name)
-    add_rows(series, _fetch_prices(db, window_start), key_of, grade_name)
-    end = max(d for days in series.values() for d in days)
-    coords = {m["public_id"]: (m["latitude"], m["longitude"]) for m in mandis
-              if m.get("latitude") is not None and m.get("longitude") is not None and not m.get("merged_into_id")}
-    recent: dict = defaultdict(list)  # crop -> reports in the last 3 days, for nearby()
-    for k, days in series.items():
-        d = max(days)
-        if (end - d).days < 3:
-            recent[k[1]].append((k[0], k[2], days[d][1], d))
-    print(f"[publish_analytics] {len(series)} keys up to {end}", flush=True)
+    con = duckdb.connect()
+    if archived and facts_glob is None:
+        facts_glob = _r2_glob(con)
+    end = load(con, facts_glob if archived else None, _fetch_prices(db, window_start), maps)
+    if end is None:
+        return {"as_of": None, "charts": 0, "written": 0}
+    print(f"[publish_analytics] prices up to {end}", flush=True)
 
-    hashes = _get_json(store, HASHES_KEY) or {}
-    written = {"series": 0, "history": 0, "insights": 0}
+    hashes = _get_json(store, CHART_HASHES_KEY) or {}
+    count, written, batch = 0, 0, []
 
-    def one(item):
-        k, days = item
-        out = {}
-        if not is_active(days, end):
-            return out
-        for prefix, make in (("series", lambda: series_file(k, days, end, stamp)), ("history", lambda: history_file(k, days, stamp)),
-                             ("insights", lambda: insights_file(k, days, end, coords, recent, stamp))):
-            key = f"{prefix}/{k[1]}/{k[0]}/{k[2]}.json"
-            payload = make() if due(prefix, key, hashes, today) else None
-            if payload is None:
-                continue
-            h = content_hash(payload)
-            if hashes.get(key) != h:
-                data = _encode(payload)
-                _check_budget(key, data)
-                store.put(key, data, "application/json")
-                out[key] = (prefix, h)
-        return out
-
-    with ThreadPoolExecutor(WORKERS) as pool:
-        for out in pool.map(one, series.items()):
-            for key, (prefix, h) in out.items():
-                hashes[key] = h
-                written[prefix] += 1
-    store.put(HASHES_KEY, _encode(hashes), "application/json")
+    def flush():
+        with ThreadPoolExecutor(WORKERS) as pool:
+            list(pool.map(lambda kd: store.put(kd[0], kd[1], "application/json"), batch))
+        batch.clear()
+    for key, payload in charts(con, end, stamp):
+        count += 1
+        h = content_hash(payload)
+        if hashes.get(key) == h or (data := _fit(key, payload)) is None:
+            continue
+        batch.append((key, data))
+        hashes[key] = h
+        written += 1
+        if len(batch) >= 500:
+            flush()
+    flush()
+    stats = key_stats(con, end)
+    store.put(STATS_KEY, _encode(stats), "application/json")
+    store.put(CHART_HASHES_KEY, _encode(hashes), "application/json")
     manifest = _get_json(store, MANIFEST_KEY) or {"v": 1, "live_updated_at": None, "catalog_version": 1, "min_app_schema": 1}
     store.put(MANIFEST_KEY, _encode({**manifest, "analytics_built_at": stamp}), "application/json")
-    return {"keys": len(series), "as_of": end.isoformat(), **written}
+    return {"as_of": end.isoformat(), "charts": count, "written": written, "stat_keys": len(stats["keys"])}
 
 
 def main() -> None:
-    import os
-
     from supabase import create_client
 
     if not R2Store.configured():
         print("[publish_analytics] MANDI_R2_* credentials are not set; nothing published.")
         return
-    store = R2Store.from_env()
-    built = (_get_json(store, MANIFEST_KEY) or {}).get("analytics_built_at") or ""
-    if "--if-stale" in sys.argv and built[:10] == datetime.now(IST).date().isoformat():
-        print(f"[publish_analytics] already built today ({built}); nothing to do.")
-        return
     db = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_KEY"])
-    print(f"[publish_analytics] {publish(db, store)}")
+    print(f"[publish_analytics] {publish(db, R2Store.from_env())}")
 
 
 if __name__ == "__main__":

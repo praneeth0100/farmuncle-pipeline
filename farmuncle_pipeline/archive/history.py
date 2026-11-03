@@ -1,4 +1,4 @@
-"""Fill history backwards: today -> 2018 in 10-day windows.
+"""Fill history backwards: today -> Nov 2016 (10 years) in 10-day windows.
 
 Each window goes one day at a time: ingest the day (Resource 2) into the warehouse, export it to R2, verify it and
 delete that day, then the next. The reference stats are snapshotted once per window, after its first day is in.
@@ -16,8 +16,7 @@ from datetime import date, timedelta
 
 from farmuncle_pipeline.archive.tracker import incomplete_reason
 
-DEFAULT_OLDEST = date(2018, 1, 1)
-MAX_FAILURES_IN_A_ROW = 3  # then the run stops for now; the days are in archive_days as FAILED and retried next run
+DEFAULT_OLDEST = date(2016, 11, 1)
 LIVE_DAYS = 3  # days kept in the warehouse for the app; keep equal to delete_price_window's guard
 
 
@@ -56,7 +55,7 @@ def _pull(ingest_day, day):
 
 
 def _settle(days, *, ingest_day, archive_day, delete_window, refresh_reference, record=None, has_unfinal_rows=None,
-            typical_rows: int | None = None, max_failures: int = MAX_FAILURES_IN_A_ROW) -> tuple[list[tuple[date, str]], bool]:
+            typical_rows: int | None = None) -> list[tuple[date, str]]:
     """Pull, verify and delete one day at a time. A day that fails is skipped and returned; the rest go on.
 
     A day that fails to ingest or upload is cleared from the warehouse too and recorded as FAILED with the reason:
@@ -64,19 +63,15 @@ def _settle(days, *, ingest_day, archive_day, delete_window, refresh_reference, 
     (Jan 2026: ~350,000 rows). A retry pulls it again.
 
     One day at a time keeps the warehouse at most one extra day (~17,000 rows) deep, so a failing step leaves
-    one day behind, not a whole window. After `max_failures` days in a row fail, the days not yet tried are
-    recorded as FAILED (retried next run) and `stopped` is True: a database that times out on every day made
-    runs last 3 to 5 hours for nothing.
+    one day behind, not a whole window. A failed day never stops the run: it is recorded as FAILED and the next
+    day goes on. The tracker retries it twice more (MAX_TRIES_PER_DAY), then leaves it.
     """
     record = record or (lambda *a, **k: None)  # bookkeeping only: it must never decide anything
     days = list(days)
     failed: list[tuple[date, str]] = []
     refreshed = False
-    streak = 0
 
     def fail(day, reason, status="FAILED", **kw):
-        nonlocal streak
-        streak += 1
         failed.append((day, reason))
         record(day, status, **kw)
 
@@ -90,14 +85,7 @@ def _settle(days, *, ingest_day, archive_day, delete_window, refresh_reference, 
         except Exception as exc:
             return f"; warehouse rows kept, cleanup delete failed: {exc}"
 
-    for i, day in enumerate(days):
-        if streak >= max_failures:
-            reason = f"not tried: {max_failures} days in a row failed"
-            for rest in days[i:]:
-                failed.append((rest, reason))
-                record(rest, "FAILED", error=reason)
-            print(f"[archive_history] stopping: {reason}")
-            return failed, True
+    for day in days:
         try:
             status = _pull(ingest_day, day).final_status
             status = str(getattr(status, "value", status))
@@ -125,14 +113,13 @@ def _settle(days, *, ingest_day, archive_day, delete_window, refresh_reference, 
             if status == "PARTIAL" else None)
         try:
             delete_window(day, day)   # straight after its verified upload
-            streak = 0
             if incomplete:
                 failed.append((day, incomplete))
             record(day, "FAILED" if incomplete else "DELETED", result=archived, error=incomplete)
         except Exception as exc:      # the upload is already verified; the day is retried next run
             note = f"{incomplete}; delete failed: {exc}" if incomplete else f"delete failed: {exc}"
             fail(day, f"uploaded, {note}", "ARCHIVED", result=archived, error=note)
-    return failed, False
+    return failed
 
 
 def run_backward(
@@ -153,7 +140,7 @@ def run_backward(
     frontier = state.get()
     if leftover_days and frontier:
         retry = sorted(leftover_days(frontier + timedelta(days=1), today - timedelta(days=live_days + 1)), reverse=True)
-        for day, reason in _settle(retry, **settle)[0]:  # a stopped retry just moves on to the windows
+        for day, reason in _settle(retry, **settle):
             print(f"[archive_history] retry: {day} still not archived: {reason}")
     longest = 0.0  # a window that would overrun the budget is not started (the job timeout would kill it half-done)
     while not getattr(state, "done", False):
@@ -170,7 +157,7 @@ def run_backward(
 
         # A day that fails never stops the window: the others are archived and deleted. A failed day
         # stays in the warehouse (nothing is deleted without a verified upload) and is listed for retry.
-        failed, stopped = _settle(window.days(), **settle)
+        failed = _settle(window.days(), **settle)
         if after_window:
             after_window(window)
         for day, reason in failed:
@@ -178,8 +165,6 @@ def run_backward(
 
         previous_day = window.start - timedelta(days=1)
         state.set(previous_day, done=previous_day < oldest)
-        if stopped:  # not counted as completed: the workflow only chains the next run after a completed window
-            break
         done_count += 1
         longest = max(longest, clock() - window_began)
     return done_count

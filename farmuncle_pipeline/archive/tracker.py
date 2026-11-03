@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date
 
 SLIVER_SHARE = 0.3  # a day with under 30% of the usual rows is incomplete (a Sunday is about 60%)
-MAX_TRIES_PER_DAY = 5  # after this many tries a FAILED day is left in archive_days for a look, not retried every run
+MAX_TRIES_PER_DAY = 3  # the first try and two retries; then a FAILED day is left in archive_days for a look
 
 
 def record_day(db, day, status: str, *, result=None, error: str | None = None) -> None:

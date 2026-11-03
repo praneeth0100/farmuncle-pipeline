@@ -343,7 +343,7 @@ def test_failed_days_reads_the_days_the_tracker_holds_as_failed():
             return Query()
 
     assert failed_days(Db(), date(2026, 2, 1), date(2026, 10, 25)) == [date(2026, 5, 12), date(2026, 5, 13)]
-    assert ("eq", "status", "FAILED") in calls and ("gte", "day", "2026-02-01") in calls and ("lte", "day", "2026-10-25") in calls and ("lt", "attempts", 5) in calls
+    assert ("eq", "status", "FAILED") in calls and ("gte", "day", "2026-02-01") in calls and ("lte", "day", "2026-10-25") in calls and ("lt", "attempts", 3) in calls
 
 
 def _failing_ingest(log, bad):
@@ -353,15 +353,15 @@ def _failing_ingest(log, bad):
     return ingest_day
 
 
-def test_three_failed_days_in_a_row_stop_the_run_and_the_untried_days_are_recorded_for_retry():
+def test_failed_days_never_stop_the_run_each_is_marked_failed_and_the_next_day_goes_on():
     log, state, recorded = [], _State(next_end=date(2026, 10, 25)), []
     deps = _deps(log)
     deps["ingest_day"] = _failing_ingest(log, {date(2026, 10, d) for d in (25, 24, 23, 22, 21, 20, 19, 18, 17, 16)})
-    done = run_backward(today=date(2026, 10, 29), oldest=date(2026, 8, 1), state=state, max_windows=5,
+    done = run_backward(today=date(2026, 10, 29), oldest=date(2026, 8, 1), state=state, max_windows=1,
                         record=lambda day, status, **kw: recorded.append((day, status)), **deps)
-    assert [e[1] for e in log if e[0] == "ingest"] == [date(2026, 10, 25), date(2026, 10, 24), date(2026, 10, 23)]
-    assert (date(2026, 10, 16), "FAILED") in recorded and len([r for r in recorded if r[1] == "FAILED"]) == 10  # all 10 days listed
-    assert done == 0 and state.next_end == date(2026, 10, 15)  # not a completed window (no chained rerun); the next run retries the list
+    assert len([e for e in log if e[0] == "ingest"]) == 10  # every day tried, none skipped as "not tried"
+    assert len([r for r in recorded if r[1] == "FAILED"]) == 10
+    assert done == 1 and state.next_end == date(2026, 10, 15)  # the window counts, so the next run is chained
 
 
 def test_a_good_day_resets_the_failure_count():
@@ -378,7 +378,7 @@ def test_a_stopped_retry_does_not_stop_the_windows():
     deps["ingest_day"] = _failing_ingest(log, {date(2026, 10, d) for d in (12, 13, 14, 15)})
     run_backward(today=date(2026, 10, 29), oldest=date(2026, 8, 1), state=state, max_windows=1,
                  leftover_days=lambda after, up_to: [date(2026, 10, d) for d in (15, 14, 13, 12)], **deps)
-    assert ("archive", date(2026, 10, 7)) in log  # the retry gave up after 3, the window still ran
+    assert ("archive", date(2026, 10, 7)) in log  # the failing retries did not stop the window
 
 
 def test_a_failed_day_with_live_or_manual_rows_is_kept_in_the_warehouse():

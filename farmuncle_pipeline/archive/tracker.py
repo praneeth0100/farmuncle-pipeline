@@ -27,6 +27,13 @@ def failed_days(db, after, up_to) -> list[date]:
     return [date.fromisoformat(r["day"]) for r in rows]
 
 
+def given_up_days(db, after, up_to) -> set[date]:
+    """FAILED days that used all their tries; left alone even when the warehouse still holds rows for them."""
+    rows = (db.table("archive_days").select("day").eq("status", "FAILED")
+            .gte("attempts", MAX_TRIES_PER_DAY).gte("day", after.isoformat()).lte("day", up_to.isoformat()).execute().data or [])
+    return {date.fromisoformat(r["day"]) for r in rows}
+
+
 def typical_rows(db) -> int | None:
     """Median rows of the last 14 archived days; None when it cannot be read (then no day is judged by size)."""
     try:

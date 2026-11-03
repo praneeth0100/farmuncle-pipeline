@@ -287,6 +287,14 @@ def home_files(*, prices, mandis, crops, varieties, grades, registry, stats, tod
     homes = homes_from(active, near)
     out = build_home(homes=sorted(homes), latest=latest, neighbours=near, coords=coords, labels=label, stats=stats,
                      odd=odd, today=today, stamp=stamp)
+    # A merged mandi's id may still be saved on phones: it gets its survivor's file.
+    by_id = {m["id"]: m for m in mandis}
+    for m in mandis:
+        target = m
+        while target.get("merged_into_id") and target["merged_into_id"] in by_id:
+            target = by_id[target["merged_into_id"]]
+        if target is not m and f"home/{target['public_id']}.json" in out:
+            out[f"home/{m['public_id']}.json"] = out[f"home/{target['public_id']}.json"]
     if with_top:
         out.update(build_top(latest=latest, stats=stats, labels=label, odd=odd, today=today, stamp=stamp))
     return out
@@ -371,7 +379,17 @@ def used_mandis(client=None) -> set[str] | None:
     # Profiles hold the app's numeric mandi ids; app_mandi_ids.json is the same map the app bundles (numeric -> R2 id).
     from pathlib import Path
     ids = json.loads((Path(__file__).parent / "app_mandi_ids.json").read_text(encoding="utf-8"))["ids"]
-    rows = client.rpc("used_mandis").execute().data or []
+    rows, start = [], 0
+    try:
+        while True:  # PostgREST returns at most 1000 rows per request
+            page = client.rpc("used_mandis").range(start, start + 999).execute().data or []
+            rows += page
+            if len(page) < 1000:
+                break
+            start += 1000
+    except Exception as exc:  # the app database being down must not stop today's prices: refresh every mandi instead
+        print(f"[publish_live] used_mandis failed, refreshing every mandi: {exc}")
+        return None
     return {r["r2_id"] or ids.get(str(r["mandi_id"])) for r in rows} - {None}
 
 

@@ -215,6 +215,9 @@ def test_used_mandis_reads_the_app_function(monkeypatch):
             assert name == "used_mandis"
             return self
 
+        def range(self, start, end):
+            return self
+
         def execute(self):
             return FakeResponse([{"mandi_id": 3, "r2_id": None}, {"mandi_id": None, "r2_id": "ka.kolar.kolar"},
                                  {"mandi_id": 999999, "r2_id": None}])  # an id the map does not know is skipped
@@ -232,3 +235,36 @@ def test_crop_state_budget_fits_every_grade_with_dates():
              "then": {"7D": [rng.randrange(1500, 6000) / 100, "2026-10-21"], "1M": [rng.randrange(1500, 6000) / 100, "2026-09-28"]}}
             for i in range(120) for v in range(3) for g in ("faq", "local")]  # a busy state: 120 mandis, 3 varieties, 2 grades
     pl._check_budget("live/crop/banana/kl.json", pl._encode({"v": 1, "rows": rows}))
+
+
+def test_used_mandis_falls_back_to_everyone_when_the_app_database_fails(monkeypatch):
+    class Broken:
+        def rpc(self, name):
+            raise RuntimeError("paused")
+    monkeypatch.setenv("APP_SUPABASE_URL", "https://x.supabase.co")
+    monkeypatch.setenv("APP_SUPABASE_KEY", "k")
+    assert pl.used_mandis(client=Broken()) is None
+
+
+def test_used_mandis_reads_past_the_1000_row_cap(monkeypatch):
+    class Paged:
+        def rpc(self, name):
+            return self
+
+        def range(self, start, end):
+            self.window = (start, end)
+            return self
+
+        def execute(self):
+            start, end = self.window
+            return FakeResponse([{"mandi_id": None, "r2_id": f"ka.x.m{i}"} for i in range(start, min(end + 1, 1500))])
+    monkeypatch.setenv("APP_SUPABASE_URL", "https://x.supabase.co")
+    monkeypatch.setenv("APP_SUPABASE_KEY", "k")
+    assert len(pl.used_mandis(client=Paged())) == 1500
+
+
+def test_a_merged_mandi_gets_its_survivors_home_file():
+    store = Store()
+    pl.publish(DB(PRICES), store, NOW, all_homes=True)
+    dup = json.loads(store["home/ka.dharwad.hubli_dup.json"])
+    assert dup["mandi_id"] == "ka.dharwad.hubli" and dup["crops"]

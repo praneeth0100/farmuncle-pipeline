@@ -1,6 +1,6 @@
 """Nightly: chart files for the app and the price-change stats behind every card, from the R2 archive plus the warehouse.
 
-  chart/{crop}/{mandi}.json   every variety and grade at one mandi: daily for the last 365 days, weekly before that
+  chart/{crop}/{mandi}.json   every variety and grade at one mandi: daily from the 1st of the month a year back, weekly before
   meta/key_stats.json         per mandi|crop|variety|grade, the price about 7 days, 1 month, 6 months and 1 year back
                               (read by publish_live for the home files; not read by the app)
 
@@ -90,7 +90,9 @@ def load(con, facts_glob: str | None, warehouse_rows: list[dict], maps: dict) ->
 def charts(con, end: date, stamp: str):
     """Yields (key, payload) per crop+mandi with an active key, lines sorted by variety then grade.
     days: [offset from start, modal, min, max]; weeks: [weeks from weekly_start, average modal]."""
-    start = end - timedelta(days=364)
+    # The daily part starts on the 1st of the month a year back, not exactly 364 days back, so day offsets (and so a chart's
+    # hash) stay the same from one day to the next: a chart is rewritten only when its own prices change, or once a month.
+    start = (end - timedelta(days=364)).replace(day=1)
     cur = con.execute("""
         WITH groups AS (
             SELECT DISTINCT crop, mandi FROM prices GROUP BY crop, mandi, variety, grade
@@ -174,7 +176,11 @@ def publish(db, store, now: datetime | None = None, facts_glob: str | None = Non
     maps = id_maps(mandis, crops, varieties, _fetch(db, "grades", "id,name"), reg)
     archived = archive_days(store)
     window_start = warehouse_start(archived, today)
-    con = duckdb.connect()
+    import tempfile
+    # On disk with a memory cap: years of archive must not have to fit in the runner's RAM.
+    folder = tempfile.mkdtemp()
+    con = duckdb.connect(f"{folder}/analytics.duckdb")
+    con.execute(f"SET memory_limit = '3GB'; SET temp_directory = '{folder}/spill'")
     if archived and facts_glob is None:
         facts_glob = _r2_glob(con)
     end = load(con, facts_glob if archived else None, _fetch_prices(db, window_start), maps)

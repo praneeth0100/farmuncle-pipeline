@@ -67,9 +67,11 @@ def test_chart_daily_last_365_and_weekly_before(tmp_path):
     warehouse = [{**fact(END, 30.0), "id": 1, "created_at": "2026-10-29T05:30:00+00:00"}]
     pa_.publish(db(warehouse), store, NOW, facts_glob=glob)
     chart = json.loads(store[CHART])
-    assert chart["start"] == (END - timedelta(days=364)).isoformat()
+    first = (END - timedelta(days=364)).replace(day=1)
+    assert chart["start"] == first.isoformat()
     (line,) = chart["lines"]
-    assert line["days"][-1] == [364, 30.0, 28.0, 32.0] and len(line["days"]) == 365  # today's warehouse price joins in
+    n = (END - first).days
+    assert line["days"][-1] == [n, 30.0, 28.0, 32.0] and len(line["days"]) == n + 1  # today's warehouse price joins in
     assert date.fromisoformat(chart["weekly_start"]).weekday() == 0
     first_daily = date.fromisoformat(chart["start"])
     last_week = date.fromisoformat(chart["weekly_start"]) + timedelta(weeks=chart["weekly"][0]["weeks"][-1][0])
@@ -113,3 +115,13 @@ def test_warehouse_read_reaches_back_to_the_last_archived_day():
     assert pa_.warehouse_start([date(2026, 10, 30), date(2026, 10, 31)], today) == date(2026, 10, 31)  # usual night
     assert pa_.warehouse_start([date(2026, 10, 27)], today) == date(2026, 10, 28)  # archive_aged missed 3 nights
     assert pa_.warehouse_start([], today) == date(2026, 10, 31)
+
+
+def test_a_new_day_without_new_prices_rewrites_no_chart(tmp_path):
+    rows = [fact(END - timedelta(days=n), 20.0 + n) for n in range(1, 13)]
+    store, glob = archive(tmp_path, rows)
+    pa_.publish(db(), store, NOW, facts_glob=glob)
+    store2, glob2 = archive(tmp_path / "b", rows + [fact(END, 30.0, mandi=3)])  # a new day, but only Pune reported
+    store2.update({k: v for k, v in store.items() if not k.startswith("facts/")})
+    out = pa_.publish(db(), store2, NOW + timedelta(days=1), facts_glob=glob2)
+    assert out["written"] == 0  # Hubli's chart did not change, so it is not rewritten

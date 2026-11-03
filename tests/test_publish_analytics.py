@@ -132,3 +132,10 @@ def test_publish_writes_files_for_active_keys_and_skips_unchanged():
     assert (again["series"], again["history"], again["insights"]) == (0, 0, 0)  # unchanged data is never rewritten
     sparse = pa_.publish(DB([]), Store({k: v for k, v in store.items() if k.startswith("facts/")}), now)
     assert sparse["series"] == 1  # 12 archive days alone are enough for an active key
+
+
+def test_warehouse_read_reaches_back_to_the_last_archived_day():
+    today = date(2026, 11, 3)
+    assert pa_.warehouse_start([date(2026, 10, 30), date(2026, 10, 31)], today) == date(2026, 10, 31)  # usual night
+    assert pa_.warehouse_start([date(2026, 10, 27)], today) == date(2026, 10, 28)  # archive_aged missed 3 nights
+    assert pa_.warehouse_start([], today) == date(2026, 10, 31)

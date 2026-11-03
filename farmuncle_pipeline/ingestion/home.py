@@ -14,7 +14,6 @@ from collections import defaultdict
 from datetime import date, timedelta
 
 WINDOW_DAYS = 14
-ROWS_PER_CROP = 6
 BETTER = 1.05  # a nearby mandi must pay at least 5% more today to be worth a trip
 HOME_BUDGET = 60_000  # gzipped bytes
 NEAREST = 6  # a used mandi's nearest neighbours are refreshed with it
@@ -86,7 +85,7 @@ def build_home(*, homes, latest, neighbours, coords, labels, stats, odd, today: 
             "stats_as_of": stats.get("as_of"),
             "mandis": {m: {"label": labels.get(m, m), "km": km, **({"approx": True} if coords.get(m, (0, 0, False))[2] else {})}
                        for m, km in used.items()},
-            "crops": [{"crop": crop, "rows": [item for _, item, _ in sorted(items, key=lambda x: (not x[2], -x[0], x[1]["variety"], x[1]["grade"] or ""))][:ROWS_PER_CROP]}
+            "crops": [{"crop": crop, "rows": [item for _, item, _ in sorted(items, key=lambda x: (not x[2], -x[0], x[1]["variety"], x[1]["grade"] or ""))]}
                       for crop, items in ranked]}
     return out
 

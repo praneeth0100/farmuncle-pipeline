@@ -49,8 +49,23 @@ def test_mandi_and_crop_files_follow_contract():
     assert hubli["updated_at"] == "2026-10-29T09:00:00+05:30"
     assert out["live/mandi/mh.pune.pune.json"]["items"] == []  # reported only yesterday
     assert out["live/crop/onion/ka.json"]["rows"] == [
-        {"mandi_id": "ka.dharwad.hubli", "variety_id": "onion.red", "modal": 24.5, "min": 21.5, "max": 27.5, "prev_modal": 23.3}]
-    assert "live/crop/onion/mh.json" not in out  # nothing today in Maharashtra
+        {"mandi_id": "ka.dharwad.hubli", "variety_id": "onion.red", "grade": "faq", "date": TODAY, "modal": 24.5, "min": 21.5,
+         "max": 27.5, "prev_modal": 23.3, "prev_date": "2026-10-28"}]
+    assert out["live/crop/onion/mh.json"]["rows"][0]["date"] == "2026-10-28"  # yesterday's price stays, with its date
+
+
+def test_crop_state_rows_keep_every_grade():
+    grades = GRADES + [{"id": 6, "name": "Local"}]
+    out = pl.build_files(prices=[price(1, 10, TODAY, 24.5, 100), price(1, 10, TODAY, 18.0, 100, gid=6)], mandis=MANDIS,
+                         crops=CROPS, varieties=VARIETIES, grades=grades, registry={}, today=date(2026, 10, 29), now=NOW)
+    rows = out["live/crop/onion/ka.json"]["rows"]
+    assert [(r["grade"], r["modal"]) for r in rows] == [("faq", 24.5), ("local", 18.0)]
+
+
+def test_crop_state_rows_keep_last_date_after_midnight():
+    out = build([price(1, 10, "2026-10-28", 23.3, 100), price(1, 10, "2026-10-25", 21.0, 100)])
+    (row,) = out["live/crop/onion/ka.json"]["rows"]
+    assert (row["date"], row["modal"], row["prev_modal"], row["prev_date"]) == ("2026-10-28", 23.3, 21.0, "2026-10-25")
 
 
 def test_slugs_are_frozen_and_unique():
@@ -113,7 +128,7 @@ class DB:
 def test_publish_writes_changed_only_and_manifest():
     store = Store()
     first = pl.publish(DB(PRICES), store, NOW)
-    assert first["written"] == first["files"] == 4
+    assert first["written"] == first["files"] == 5  # onion/mh too: Pune's yesterday price stays listed
     assert json.loads(store["catalog/mandis.json"])["version"] == 1
     assert [s["id"] for s in json.loads(store["catalog/states.json"])["states"]] == ["ka", "mh"]
     assert json.loads(store["meta/manifest.json"])["live_updated_at"] == "2026-10-29T09:00:00+05:30"

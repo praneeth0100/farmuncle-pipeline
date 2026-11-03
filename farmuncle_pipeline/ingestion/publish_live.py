@@ -134,6 +134,7 @@ def build_files(*, prices, mandis, crops, varieties, grades, registry, today: da
         crop_days[k[0]][r["price_date"]].add(k[1])
 
     out: dict[str, dict] = {}
+    cutoff = (today - timedelta(days=RECENT_CROPS_DAYS)).isoformat()
     items_by_mandi: dict[str, list] = defaultdict(list)
     for (pid, cslug, vid, grade), days in sorted(series.items(), key=lambda kv: tuple(str(x) for x in kv[0])):
         today_row = days.get(today.isoformat())
@@ -145,7 +146,6 @@ def build_files(*, prices, mandis, crops, varieties, grades, registry, today: da
             "modal": _price(today_row["modal_price"]), "min": _price(today_row["min_price"]), "max": _price(today_row["max_price"]),
             "prev_modal": _price(days[earlier]["modal_price"]) if earlier else None, "prev_date": earlier,
             "reported_at": _ts(today_row["created_at"])})
-    cutoff = (today - timedelta(days=RECENT_CROPS_DAYS)).isoformat()
     for pid, by_day in crop_days.items():
         counts = Counter(c for d, crops_ in by_day.items() if d >= cutoff for c in crops_)
         out[f"live/mandi/{pid}.json"] = {
@@ -153,22 +153,22 @@ def build_files(*, prices, mandis, crops, varieties, grades, registry, today: da
             "items": items_by_mandi.get(pid, []),
             "recent_crops": [c for c, _ in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]}
 
+    # Screen 2: every mandi, variety and grade with its latest price in the window, dated, so a new day never empties it.
     rows_by_file: dict[str, list] = defaultdict(list)
-    for pid, items in items_by_mandi.items():
-        state = pid.split(".")[0]
-        best: dict[str, dict] = {}
-        for it in items:  # one row per mandi and variety: prefer FAQ, else the first grade by name
-            cur = best.get(it["variety_id"])
-            if cur is None or (it["grade"] == "faq" and cur["grade"] != "faq"):
-                best[it["variety_id"]] = it
-        for vid, it in best.items():
-            rows_by_file[f"live/crop/{it['crop_id']}/{state}.json"].append({
-                "mandi_id": pid, "variety_id": vid, "modal": it["modal"], "min": it["min"], "max": it["max"],
-                "prev_modal": it["prev_modal"]})
+    for (pid, cslug, vid, grade), days in series.items():
+        ds = sorted(d for d in days if d >= cutoff)
+        if not ds:
+            continue
+        last = days[ds[-1]]
+        earlier = max((d for d in days if d < ds[-1]), default=None)
+        rows_by_file[f"live/crop/{cslug}/{pid.split('.')[0]}.json"].append({
+            "mandi_id": pid, "variety_id": vid, "grade": grade, "date": ds[-1], "modal": _price(last["modal_price"]),
+            "min": _price(last["min_price"]), "max": _price(last["max_price"]),
+            "prev_modal": _price(days[earlier]["modal_price"]) if earlier else None, "prev_date": earlier})
     for key, rows in rows_by_file.items():
         _, _, cslug, fname = key.split("/")
         out[key] = {"v": 1, "crop_id": cslug, "state": fname[:-5], "date": today.isoformat(), "updated_at": stamp,
-                    "rows": sorted(rows, key=lambda r: (r["mandi_id"], r["variety_id"]))}
+                    "rows": sorted(rows, key=lambda r: (r["mandi_id"], r["variety_id"], r["grade"] or ""))}
     out[SLUGS_KEY] = reg
     return out
 

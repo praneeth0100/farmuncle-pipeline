@@ -30,4 +30,6 @@ jobs:
           MANDI_R2_ACCESS_KEY_ID: ${{ secrets.MANDI_R2_ACCESS_KEY_ID }}
           MANDI_R2_SECRET_ACCESS_KEY: ${{ secrets.MANDI_R2_SECRET_ACCESS_KEY }}
           MANDI_R2_BUCKET: ${{ secrets.MANDI_R2_BUCKET }}
+          APP_SUPABASE_URL: ${{ secrets.APP_SUPABASE_URL }} # with these, only mandis farmers use (and neighbours) refresh hourly
+          APP_SUPABASE_KEY: ${{ secrets.APP_SUPABASE_KEY }}
         run: python -m farmuncle_pipeline.ingestion.publish_live

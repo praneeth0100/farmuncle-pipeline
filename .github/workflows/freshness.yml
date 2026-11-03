@@ -1,0 +1,21 @@
+name: freshness
+
+# Hourly: fails when the app's data is stale, so GitHub emails the owner within the hour instead of days later.
+# Reads only the public manifest. Set the repo variable MANDI_DATA_URL once a custom domain exists.
+on:
+  schedule:
+    - cron: "40 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: python -m farmuncle_pipeline.ops.freshness "${{ vars.MANDI_DATA_URL || 'https://pub-671d7ccd15104d01bd8e0f04e8311f6b.r2.dev' }}"

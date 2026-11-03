@@ -168,7 +168,7 @@ def _deps(log, *, fail_ingest_on=None, fail_archive=False):
         return SimpleNamespace(final_status="FAILED" if d == fail_ingest_on else "SUCCESS")
 
     def arch(d):
-        if fail_archive:
+        if fail_archive is True or (fail_archive and d in fail_archive):  # True, or the days that fail
             raise ArchiveError("boom")
         log.append(("archive", d))
         return SimpleNamespace(rows=10)
@@ -214,7 +214,7 @@ def test_a_failed_upload_is_recorded_with_its_reason_and_the_day_is_cleared_from
     log, state, recorded = [], _State(next_end=date(2026, 10, 18)), []
     run_backward(today=date(2026, 10, 29), oldest=date(2026, 8, 1), state=state, max_windows=1,
                  record=lambda day, status, **kw: recorded.append((day, status, kw.get("error"))),
-                 **_deps(log, fail_archive=True))
+                 **_deps(log, fail_archive={date(2026, 10, 18)}))
     assert ("delete", date(2026, 10, 18), date(2026, 10, 18)) in log  # cleared, so a failed day cannot pile up
     assert recorded[0][1] == "FAILED" and recorded[0][2].startswith("upload: boom") and "pulled again on retry" in recorded[0][2]
     assert state.next_end == date(2026, 10, 8)
@@ -222,7 +222,7 @@ def test_a_failed_upload_is_recorded_with_its_reason_and_the_day_is_cleared_from
 
 def test_a_failed_cleanup_delete_is_said_in_the_reason():
     log, state, recorded = [], _State(next_end=date(2026, 10, 18)), []
-    deps = _deps(log, fail_archive=True)
+    deps = _deps(log, fail_archive={date(2026, 10, 18)})
 
     def broken_delete(s, e):
         raise RuntimeError("statement timeout")
@@ -325,6 +325,26 @@ def test_each_day_is_recorded_and_a_broken_recorder_changes_nothing():
     record_day(Broken(), date(2026, 10, 18), "DELETED")  # prints, does not raise
 
 
+def test_given_up_days_are_the_failed_days_that_used_all_their_tries():
+    from farmuncle_pipeline.archive.tracker import given_up_days
+
+    calls = []
+
+    class Query:
+        def __getattr__(self, name):
+            return lambda *a: (calls.append((name, *a)), self)[1]
+
+        def execute(self):
+            return SimpleNamespace(data=[{"day": "2026-05-12"}])
+
+    class Db:
+        def table(self, name):
+            return Query()
+
+    assert given_up_days(Db(), date(2026, 2, 1), date(2026, 10, 25)) == {date(2026, 5, 12)}
+    assert ("eq", "status", "FAILED") in calls and ("gte", "attempts", 3) in calls and ("gte", "day", "2026-02-01") in calls
+
+
 def test_failed_days_reads_the_days_the_tracker_holds_as_failed():
     from farmuncle_pipeline.archive.tracker import failed_days
 
@@ -356,12 +376,41 @@ def _failing_ingest(log, bad):
 def test_failed_days_never_stop_the_run_each_is_marked_failed_and_the_next_day_goes_on():
     log, state, recorded = [], _State(next_end=date(2026, 10, 25)), []
     deps = _deps(log)
-    deps["ingest_day"] = _failing_ingest(log, {date(2026, 10, d) for d in (25, 24, 23, 22, 21, 20, 19, 18, 17, 16)})
+    deps["ingest_day"] = _failing_ingest(log, {date(2026, 10, d) for d in (25, 24, 23, 22, 21, 20, 19, 18, 17)})
     done = run_backward(today=date(2026, 10, 29), oldest=date(2026, 8, 1), state=state, max_windows=1,
                         record=lambda day, status, **kw: recorded.append((day, status)), **deps)
     assert len([e for e in log if e[0] == "ingest"]) == 10  # every day tried, none skipped as "not tried"
-    assert len([r for r in recorded if r[1] == "FAILED"]) == 10
+    assert len([r for r in recorded if r[1] == "FAILED"]) == 9 and (date(2026, 10, 16), "DELETED") in recorded
     assert done == 1 and state.next_end == date(2026, 10, 15)  # the window counts, so the next run is chained
+
+
+def test_a_window_where_every_day_fails_is_an_outage_no_try_is_counted_and_it_is_redone():
+    log, state, recorded = [], _State(next_end=date(2026, 10, 25)), []
+    deps = _deps(log)
+    deps["ingest_day"] = _failing_ingest(log, {date(2026, 10, d) for d in range(10, 26)})
+    done = run_backward(today=date(2026, 10, 29), oldest=date(2026, 8, 1), state=state, max_windows=3,
+                                                record=lambda day, status, **kw: recorded.append((day, status)), **deps)
+    assert recorded == []  # the database or the feed was down: nothing counts towards a day's 3 tries
+    assert done == 0 and state.next_end == date(2026, 10, 25)  # the same window runs again next time
+
+
+def test_a_failed_retry_is_not_counted_when_the_window_after_it_also_failed_entirely():
+    log, state, recorded = [], _State(next_end=date(2026, 10, 8)), []
+    deps = _deps(log)
+    deps["ingest_day"] = _failing_ingest(log, {date(2026, 10, d) for d in range(1, 13)} | {date(2026, 9, 29), date(2026, 9, 30)})
+    run_backward(today=date(2026, 10, 29), oldest=date(2026, 8, 1), state=state, max_windows=1,
+                 leftover_days=lambda after, up_to: [date(2026, 10, 12)],
+                 record=lambda day, status, **kw: recorded.append((day, status)), **deps)
+    assert recorded == []
+
+
+def test_a_failed_retry_is_counted_when_the_window_worked():
+    log, state, recorded = [], _State(next_end=date(2026, 10, 8)), []
+    run_backward(today=date(2026, 10, 29), oldest=date(2026, 8, 1), state=state, max_windows=1,
+                 leftover_days=lambda after, up_to: [date(2026, 10, 12)],
+                 record=lambda day, status, **kw: recorded.append((day, status)),
+                 **_deps(log, fail_ingest_on=date(2026, 10, 12)))
+    assert (date(2026, 10, 12), "FAILED") in recorded
 
 
 def test_a_good_day_resets_the_failure_count():
@@ -386,7 +435,7 @@ def test_a_failed_day_with_live_or_manual_rows_is_kept_in_the_warehouse():
     run_backward(today=date(2026, 10, 29), oldest=date(2026, 8, 1), state=state, max_windows=1,
                  has_unfinal_rows=lambda d: d == date(2026, 10, 18),
                  record=lambda day, status, **kw: recorded.append((day, status, kw.get("error"))),
-                 **_deps(log, fail_archive=True))
+                 **_deps(log, fail_archive={date(2026, 10, 18), date(2026, 10, 17)}))
     assert ("delete", date(2026, 10, 18), date(2026, 10, 18)) not in log  # kept: these rows cannot be pulled again
     assert ("delete", date(2026, 10, 17), date(2026, 10, 17)) in log      # a day without them is cleared
     assert "kept: the day has live or manual rows" in recorded[0][2]

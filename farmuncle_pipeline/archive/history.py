@@ -135,8 +135,22 @@ def run_backward(
     """
     began = clock()
     done_count = 0
+    record = record or (lambda *a, **k: None)
+    pending: list[tuple[tuple, dict]] = []  # held until a window shows the database and the feed are up
     settle = dict(ingest_day=ingest_day, archive_day=archive_day, delete_window=delete_window,
-                  refresh_reference=refresh_reference, record=record, has_unfinal_rows=has_unfinal_rows, typical_rows=typical_rows)
+                  refresh_reference=refresh_reference, record=lambda *a, **k: pending.append((a, k)),
+                  has_unfinal_rows=has_unfinal_rows, typical_rows=typical_rows)
+
+    def went_through(a, k):  # the day reached R2 (a failure after the pull still carries its result)
+        return a[1] != "FAILED" or k.get("result") is not None
+
+    def flush(outage=False):
+        """A window in which no day went through means the database or the feed was down: its failures (and the
+        retries' before it) are not the days' fault, so they are not recorded and use none of a day's 3 tries."""
+        for a, k in pending:
+            if not outage or went_through(a, k):
+                record(*a, **k)
+        pending.clear()
     frontier = state.get()
     if leftover_days and frontier:
         retry = sorted(leftover_days(frontier + timedelta(days=1), today - timedelta(days=live_days + 1)), reverse=True)
@@ -158,6 +172,12 @@ def run_backward(
         # A day that fails never stops the window: the others are archived and deleted. A failed day
         # stays in the warehouse (nothing is deleted without a verified upload) and is listed for retry.
         failed = _settle(window.days(), **settle)
+        if not any(went_through(a, k) for a, k in pending):
+            flush(outage=True)
+            print(f"[archive_history] every day of {window.start}..{window.end} failed: treated as an outage; "
+                  "no try counted, the window runs again next time")
+            break
+        flush()
         if after_window:
             after_window(window)
         for day, reason in failed:
@@ -167,4 +187,5 @@ def run_backward(
         state.set(previous_day, done=previous_day < oldest)
         done_count += 1
         longest = max(longest, clock() - window_began)
+    flush()  # no window ran (cap, budget or done): the retries' results stand
     return done_count

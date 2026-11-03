@@ -19,10 +19,9 @@ from datetime import date, datetime, timedelta
 
 from farmuncle_pipeline.archive.store import R2Store
 from farmuncle_pipeline.ingestion.publish_live import (
-    IST, MANIFEST_KEY, SLUGS_KEY, _encode, _fetch, _fetch_prices, _get_json, _price, assign_slugs, content_hash, slugify)
+    IST, MANIFEST_KEY, SLUGS_KEY, STATS_KEY, _encode, _fetch, _fetch_prices, _get_json, _price, assign_slugs, content_hash, slugify)
 
 CHART_HASHES_KEY = "meta/chart_hashes.json"
-STATS_KEY = "meta/key_stats.json"
 CHART_BUDGET = 80_000  # gzipped bytes
 WINDOW_DAYS = 3  # warehouse days; older days come from the archive
 ACTIVE_REPORTS, ACTIVE_DAYS = 10, 90

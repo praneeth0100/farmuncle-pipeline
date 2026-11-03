@@ -7,7 +7,7 @@ import os
 
 def cache_seconds(key: str) -> int:
     """Browser/CDN cache time for a JSON file (spec 2.3): manifest 60 s, live files 10 min, everything else 1 h."""
-    return 60 if key == "meta/manifest.json" else 600 if key.startswith("live/") else 3600
+    return 60 if key == "meta/manifest.json" else 600 if key.startswith(("live/", "home/")) else 3600
 
 
 class R2Store:

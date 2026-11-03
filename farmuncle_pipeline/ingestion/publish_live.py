@@ -22,7 +22,9 @@ from datetime import date, datetime, timedelta, timezone
 
 from farmuncle_pipeline.archive.export import PAGE
 from farmuncle_pipeline.archive.store import R2Store
-from farmuncle_pipeline.ingestion.geo import fill_coords, labels
+from farmuncle_pipeline.ingestion.geo import fill_coords, labels, neighbours
+from farmuncle_pipeline.ingestion.home import build_home, build_top, homes_to_build, latest_rows, trim
+from farmuncle_pipeline.ingestion.quality import odd_keys
 
 IST = timezone(timedelta(hours=5, minutes=30))
 WINDOW_DAYS = 3  # the warehouse keeps 3 days; older days come from the R2 archive (read only)
@@ -31,6 +33,7 @@ WRITERS = 16
 CATALOG_BUMP_EVERY = timedelta(hours=24)
 BUDGET = {"live/mandi/": 10_000, "live/crop/": 10_000, "catalog/mandis.json": 250_000}  # gzipped bytes, spec 6.7
 HASHES_KEY, MANIFEST_KEY, SLUGS_KEY = "meta/live_hashes.json", "meta/manifest.json", "meta/crop_slugs.json"
+STATS_KEY = "meta/key_stats.json"  # written nightly by publish_analytics
 
 
 def slugify(text: str) -> str:
@@ -116,7 +119,7 @@ def make_key_fn(mandis, crops, reg, varieties=()):
     return key_of
 
 
-def build_files(*, prices, mandis, crops, varieties, grades, registry, today: date, now: datetime) -> dict:
+def build_files(*, prices, mandis, crops, varieties, grades, registry, today: date, now: datetime, stats: dict | None = None) -> dict:
     """Pure: warehouse rows in, {key: payload} out (live files only, plus the updated registry under SLUGS_KEY)."""
     reg = assign_slugs(crops, varieties, registry)
     key_of = make_key_fn(mandis, crops, reg, varieties)
@@ -164,7 +167,8 @@ def build_files(*, prices, mandis, crops, varieties, grades, registry, today: da
         rows_by_file[f"live/crop/{cslug}/{pid.split('.')[0]}.json"].append({
             "mandi_id": pid, "variety_id": vid, "grade": grade, "date": ds[-1], "modal": _price(last["modal_price"]),
             "min": _price(last["min_price"]), "max": _price(last["max_price"]),
-            "prev_modal": _price(days[earlier]["modal_price"]) if earlier else None, "prev_date": earlier})
+            "prev_modal": _price(days[earlier]["modal_price"]) if earlier else None, "prev_date": earlier,
+            "then": ((stats or {}).get("keys") or {}).get(f"{pid}|{cslug}|{vid}|{grade or ''}", {})})
     for key, rows in rows_by_file.items():
         _, _, cslug, fname = key.split("/")
         out[key] = {"v": 1, "crop_id": cslug, "state": fname[:-5], "date": today.isoformat(), "updated_at": stamp,
@@ -267,7 +271,29 @@ def catalog_step(changed: bool, version: int, hashes: dict, now: datetime, first
     return changed or bump, version + bump
 
 
-def publish(db, store, now: datetime | None = None) -> dict:
+def home_files(*, prices, mandis, crops, varieties, grades, registry, stats, today, stamp, homes_from, with_top: bool) -> dict:
+    """home/ files for the mandis `homes_from` picks (see home.homes_to_build), and top/ files on a full run."""
+    key_of = make_key_fn(mandis, crops, registry, varieties)
+    grade_name = {g["id"]: slugify(g["name"]) for g in grades}
+    rows = [{"key": (*k, grade_name.get(r.get("grade_id")) or None), "date": r["price_date"], "modal": modal,
+             "min": _price(r["min_price"]), "max": _price(r["max_price"])}
+            for r in prices if (k := key_of(r)) and (modal := _price(r["modal_price"])) is not None]
+    latest = latest_rows(rows, today)
+    odd = odd_keys([{"key": k, "state": k[0].split(".")[0], **v} for k, v in latest.items()])
+    active = {m["public_id"] for m in mandis if m.get("status") == "ACTIVE" and not m.get("merged_into_id")}
+    coords = {pid: c for pid, c in fill_coords(mandis).items() if pid in active}
+    near, label = neighbours(coords), labels(mandis)
+    homes = homes_from(active, near)
+    out = build_home(homes=sorted(homes), latest=latest, neighbours=near, coords=coords, labels=label, stats=stats,
+                     odd=odd, today=today, stamp=stamp)
+    if with_top:
+        out.update(build_top(latest=latest, stats=stats, labels=label, odd=odd, today=today, stamp=stamp))
+    return out
+
+
+def publish(db, store, now: datetime | None = None, *, all_homes: bool = False, used: set | None = None) -> dict:
+    """all_homes: the nightly run, every mandi's home file plus top/ files. Otherwise the hourly run: home files for the
+    `used` mandis and their nearest neighbours, or every mandi when there is no user list (used None)."""
     now = now or datetime.now(IST)
     today = now.astimezone(IST).date()
     print("[publish_live] reading the warehouse", flush=True)
@@ -275,10 +301,10 @@ def publish(db, store, now: datetime | None = None) -> dict:
     crops = _fetch(db, "crops", "id,name,category,display_unit,status,merged_into_id")
     varieties = _fetch(db, "varieties", "id,crop_id,name,status,merged_into_id")
     codes = {r["state"]: r["code"] for r in _fetch_state_codes(db)}
-    files = build_files(
-        prices=archive_rows(store, today) + _fetch_prices(db, today - timedelta(days=WINDOW_DAYS)),
-        mandis=mandis, crops=crops, varieties=varieties, grades=_fetch(db, "grades", "id,name"),
-        registry=_get_json(store, SLUGS_KEY) or {}, today=today, now=now)
+    prices = archive_rows(store, today) + _fetch_prices(db, today - timedelta(days=WINDOW_DAYS))
+    grades, stats = _fetch(db, "grades", "id,name"), _get_json(store, STATS_KEY) or {}
+    files = build_files(prices=prices, mandis=mandis, crops=crops, varieties=varieties, grades=grades,
+                        registry=_get_json(store, SLUGS_KEY) or {}, today=today, now=now, stats=stats)
     print(f"[publish_live] built {len(files) - 1} files", flush=True)
     registry = files.pop(SLUGS_KEY)
     hashes = _get_json(store, HASHES_KEY) or {}
@@ -299,6 +325,15 @@ def publish(db, store, now: datetime | None = None) -> dict:
         list(pool.map(lambda kv: store.put(kv[0], kv[1], "application/json"), encoded.items()))
     hashes.update({k: content_hash(changed[k]) for k in encoded})
 
+    homes = home_files(prices=prices, mandis=mandis, crops=crops, varieties=varieties, grades=grades, registry=registry,
+                       stats=stats, today=today, stamp=stamp,
+                       homes_from=lambda ids, near: homes_to_build(ids, None if all_homes else used, near), with_top=all_homes)
+    home_changed = {k: p for k, p in homes.items() if hashes.get(k) != content_hash(p)}
+    home_bytes = {k: trim(p) if k.startswith("home/") else _encode(p) for k, p in home_changed.items()}
+    with ThreadPoolExecutor(WRITERS) as pool:
+        list(pool.map(lambda kv: store.put(kv[0], kv[1], "application/json"), home_bytes.items()))
+    hashes.update({k: content_hash(p) for k, p in home_changed.items()})
+
     manifest = _get_json(store, MANIFEST_KEY) or {}
     version = int(manifest.get("catalog_version") or 1)
     catalogs = build_catalogs(mandis=mandis, crops=crops, varieties=varieties, codes=codes, registry=registry)
@@ -315,15 +350,30 @@ def publish(db, store, now: datetime | None = None) -> dict:
     store.put(MANIFEST_KEY, _encode({
         "v": 1, "live_updated_at": stamp, "analytics_built_at": manifest.get("analytics_built_at"),
         "catalog_version": version, "min_app_schema": manifest.get("min_app_schema", 1)}), "application/json")
-    return {"files": len(files), "written": len(changed), "catalog": version}
+    return {"files": len(files), "written": len(changed), "catalog": version, "homes": len(homes), "homes_written": len(home_changed)}
 
 
 def _fetch_state_codes(db) -> list[dict]:
     return db.table("state_codes").select("state,code").execute().data or []
 
 
+def used_mandis(client=None) -> set[str] | None:
+    """R2 ids of mandis that farmers use, from the app database's used_mandis() (ids only, no personal data).
+    None when APP_SUPABASE_URL / APP_SUPABASE_KEY are not set: then every mandi is refreshed hourly."""
+    import os
+
+    if not (os.environ.get("APP_SUPABASE_URL") and os.environ.get("APP_SUPABASE_KEY")):
+        return None
+    if client is None:
+        from supabase import create_client
+        client = create_client(os.environ["APP_SUPABASE_URL"], os.environ["APP_SUPABASE_KEY"])
+    rows = client.rpc("used_mandis").execute().data or []
+    return {r["used_mandis"] if isinstance(r, dict) else r for r in rows}
+
+
 def main() -> None:
     import os
+    import sys
 
     from supabase import create_client
 
@@ -331,7 +381,9 @@ def main() -> None:
         print("[publish_live] MANDI_R2_* credentials are not set; nothing published.")
         return
     store = R2Store.from_env()
-    print(f"[publish_live] {publish(create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_KEY"]), store)}")
+    all_homes = "--all-homes" in sys.argv  # the nightly run
+    db = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_KEY"])
+    print(f"[publish_live] {publish(db, store, all_homes=all_homes, used=None if all_homes else used_mandis())}")
 
 
 if __name__ == "__main__":

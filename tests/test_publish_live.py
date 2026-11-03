@@ -50,7 +50,7 @@ def test_mandi_and_crop_files_follow_contract():
     assert out["live/mandi/mh.pune.pune.json"]["items"] == []  # reported only yesterday
     assert out["live/crop/onion/ka.json"]["rows"] == [
         {"mandi_id": "ka.dharwad.hubli", "variety_id": "onion.red", "grade": "faq", "date": TODAY, "modal": 24.5, "min": 21.5,
-         "max": 27.5, "prev_modal": 23.3, "prev_date": "2026-10-28"}]
+         "max": 27.5, "prev_modal": 23.3, "prev_date": "2026-10-28", "then": {}}]
     assert out["live/crop/onion/mh.json"]["rows"][0]["date"] == "2026-10-28"  # yesterday's price stays, with its date
 
 
@@ -180,3 +180,43 @@ def test_merged_variety_resolves_to_its_survivor():
     key_of = pl.make_key_fn(MANDIS, CROPS, reg, varieties)
     row = {"mandi_id": 1, "crop_id": 10, "variety_id": 101}
     assert key_of(row) == key_of({**row, "variety_id": 100}) == ("ka.dharwad.hubli", "onion", "onion.red")
+
+
+def test_crop_state_rows_carry_then_from_stats():
+    stats = {"keys": {"ka.dharwad.hubli|onion|onion.red|faq": {"7D": [20.0, "2026-10-22"]}}}
+    out = pl.build_files(prices=PRICES, mandis=MANDIS, crops=CROPS, varieties=VARIETIES, grades=GRADES, registry={},
+                         today=date(2026, 10, 29), now=NOW, stats=stats)
+    assert out["live/crop/onion/ka.json"]["rows"][0]["then"] == {"7D": [20.0, "2026-10-22"]}
+
+
+def test_full_run_writes_home_and_top_files_hourly_run_only_used():
+    store = Store()
+    pl.publish(DB(PRICES), store, NOW, all_homes=True)
+    hubli = json.loads(store["home/ka.dharwad.hubli.json"])
+    assert hubli["crops"][0]["crop"] == "onion" and hubli["crops"][0]["rows"][0]["modal"] == 24.5
+    assert "top/onion.json" in store
+    hourly = Store()
+    pl.publish(DB(PRICES), hourly, NOW)  # no user list: every home, but top/ only nightly
+    assert "home/ka.dharwad.hubli.json" in hourly and not [k for k in hourly if k.startswith("top/")]
+    quiet = Store()
+    pl.publish(DB(PRICES), quiet, NOW, used=set())  # a user list with nobody on it: no homes
+    assert not [k for k in quiet if k.startswith(("home/", "top/"))]
+
+
+def test_used_mandis_is_none_without_app_secrets(monkeypatch):
+    monkeypatch.delenv("APP_SUPABASE_URL", raising=False)
+    monkeypatch.delenv("APP_SUPABASE_KEY", raising=False)
+    assert pl.used_mandis() is None
+
+
+def test_used_mandis_reads_the_app_function(monkeypatch):
+    class App:
+        def rpc(self, name):
+            assert name == "used_mandis"
+            return self
+
+        def execute(self):
+            return FakeResponse([{"used_mandis": "ka.kolar.kolar"}, "ka.dharwad.hubli"])
+    monkeypatch.setenv("APP_SUPABASE_URL", "https://x.supabase.co")
+    monkeypatch.setenv("APP_SUPABASE_KEY", "k")
+    assert pl.used_mandis(client=App()) == {"ka.kolar.kolar", "ka.dharwad.hubli"}

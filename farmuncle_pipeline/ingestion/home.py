@@ -1,8 +1,8 @@
 """home/{mandi}.json: everything Screen 1 shows for a farmer at one mandi, worked out once on the server.
 
 For every crop, variety and grade reported within 200 km in the last 14 days, the price a card shows, chosen by the
-ladder: reported today, nearest first (home, then its neighbours, out to 200 km); else the latest report, nearest
-first. A price flagged odd is used only when nothing else exists. Every row carries its own date, so a new day never
+ladder: the farmer's own mandi if it reported today or yesterday; else the nearest mandi that reported today; else the
+latest report, nearest first. The own mandi's crops come first, then crops with fresh prices, then old ones. A price flagged odd is used only when nothing else exists. Every row carries its own date, so a new day never
 empties the file, and the 7D/1M/6M/1Y prices from the nightly key stats.
 """
 
@@ -47,7 +47,7 @@ def build_home(*, homes, latest, neighbours, coords, labels, stats, odd, today: 
     by_mandi: dict[str, list] = defaultdict(list)
     for (pid, crop, variety, grade), row in latest.items():
         by_mandi[pid].append(((crop, variety, grade), row))
-    stat_keys, t = stats.get("keys", {}), today.isoformat()
+    stat_keys, t, fresh = stats.get("keys", {}), today.isoformat(), (today - timedelta(days=1)).isoformat()
     out = {}
     for h in homes:
         reach = [(h, 0), *neighbours.get(h, [])]
@@ -60,7 +60,10 @@ def build_home(*, homes, latest, neighbours, coords, labels, stats, odd, today: 
             def pick(today_only, allow_odd):
                 return next((o for o in options if (not today_only or o[2]["date"] == t)
                              and (allow_odd or (o[1], *cvg) not in odd)), None)
-            km, pid, row = pick(True, False) or pick(False, False) or pick(True, True) or pick(False, True)
+            # The farmer's own mandi wins while its price is from today or yesterday; then the nearest mandi with a price
+            # from today; then the latest anywhere in reach. Odd prices only when nothing else exists.
+            own = next((o for o in options if o[1] == h and o[2]["date"] >= fresh and (h, *cvg) not in odd), None)
+            km, pid, row = own or pick(True, False) or pick(False, False) or pick(True, True) or pick(False, True)
             item = {"variety": cvg[1], "grade": cvg[2], "mandi": pid, **row,
                     "then": stat_keys.get(f"{pid}|{cvg[0]}|{cvg[1]}|{cvg[2] or ''}", {})}
             if (pid, *cvg) in odd:
@@ -73,7 +76,10 @@ def build_home(*, homes, latest, neighbours, coords, labels, stats, odd, today: 
                     used[best[1]] = best[0]
             used[pid] = km
             crops[cvg[0]].append((len(options), item, any(o[1] == h for o in options)))
-        ranked = sorted(crops.items(), key=lambda kv: (-(sum(n for n, _, _ in kv[1]) + 2 * any(a for _, _, a in kv[1])), kv[0]))
+        # The farmer's own mandi's crops first, then crops with a price from today or yesterday, then older ones;
+        # within each, the crops most mandis around trade.
+        ranked = sorted(crops.items(), key=lambda kv: (not any(a for _, _, a in kv[1]),
+                                                       max(i["date"] for _, i, _ in kv[1]) < fresh, -sum(n for n, _, _ in kv[1]), kv[0]))
         out[f"home/{h}.json"] = {
             "v": 2, "mandi_id": h, "label": labels.get(h, h), "state": h.split(".")[0], "as_of": t, "updated_at": stamp,
             "lat": coords.get(h, (None,))[0], "lng": coords.get(h, (None, None))[1],

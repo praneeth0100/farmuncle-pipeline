@@ -28,8 +28,13 @@ def rows_of(out, crop="tomato", mandi="h"):
     return next(c["rows"] for c in out[f"home/{mandi}.json"]["crops"] if c["crop"] == crop)
 
 
-def test_home_today_beats_yesterday_even_if_farther():
+def test_home_own_price_from_yesterday_beats_another_mandi_today():
     (row,) = rows_of(build({key("h"): r(Y, 20), key("a"): r(T, 25)}))
+    assert (row["mandi"], row["date"]) == ("h", Y)  # the farmer's own mandi, still fresh
+
+
+def test_home_older_own_price_loses_to_a_nearby_mandi_today():
+    (row,) = rows_of(build({key("h"): r("2026-11-01", 20), key("a"): r(T, 25)}))
     assert (row["mandi"], row["date"], row["modal"]) == ("a", T, 25)
 
 
@@ -112,3 +117,11 @@ def test_top_file_ranks_by_price_and_rise_per_grade():
     assert [m["mandi"] for m in faq["by_price"]] == ["a", "b", "h"]
     assert [(m["mandi"], m["pct"]) for m in faq["by_rise"]] == [("h", 100), ("a", 4)]
     assert [m["mandi"] for m in lines[("tomato.local", "local")]["by_price"]] == ["a"]
+
+
+def test_home_lists_own_crops_first_then_fresh_then_old():
+    latest = {key("a", crop="onion", variety="onion.red"): r(T, 30), key("b", crop="onion", variety="onion.red"): r(T, 31),
+              key("a", crop="garlic", variety="garlic.x"): r("2026-10-25", 90), key("b", crop="garlic", variety="garlic.x"): r("2026-10-25", 95),
+              key("b", crop="okra", variety="okra.x"): r(T, 40),
+              key("h", crop="beans", variety="beans.x"): r("2026-10-30", 40)}
+    assert [c["crop"] for c in build(latest)["home/h.json"]["crops"]] == ["beans", "onion", "okra", "garlic"]

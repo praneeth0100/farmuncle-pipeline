@@ -216,7 +216,8 @@ def test_used_mandis_reads_the_app_function(monkeypatch):
             return self
 
         def execute(self):
-            return FakeResponse([{"used_mandis": "ka.kolar.kolar"}, "ka.dharwad.hubli"])
+            return FakeResponse([{"mandi_id": 3, "r2_id": None}, {"mandi_id": None, "r2_id": "ka.kolar.kolar"},
+                                 {"mandi_id": 999999, "r2_id": None}])  # an id the map does not know is skipped
     monkeypatch.setenv("APP_SUPABASE_URL", "https://x.supabase.co")
     monkeypatch.setenv("APP_SUPABASE_KEY", "k")
-    assert pl.used_mandis(client=App()) == {"ka.kolar.kolar", "ka.dharwad.hubli"}
+    assert pl.used_mandis(client=App()) == {"ap.kakinada.kakinada_urban", "ka.kolar.kolar"}

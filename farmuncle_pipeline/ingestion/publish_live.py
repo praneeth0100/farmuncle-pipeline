@@ -358,7 +358,7 @@ def _fetch_state_codes(db) -> list[dict]:
 
 
 def used_mandis(client=None) -> set[str] | None:
-    """R2 ids of mandis that farmers use, from the app database's used_mandis() (ids only, no personal data).
+    """R2 ids of mandis that farmers use or picked lately, from the app database's used_mandis() (ids only, no personal data).
     None when APP_SUPABASE_URL / APP_SUPABASE_KEY are not set: then every mandi is refreshed hourly."""
     import os
 
@@ -367,8 +367,11 @@ def used_mandis(client=None) -> set[str] | None:
     if client is None:
         from supabase import create_client
         client = create_client(os.environ["APP_SUPABASE_URL"], os.environ["APP_SUPABASE_KEY"])
+    # Profiles hold the app's numeric mandi ids; app_mandi_ids.json is the same map the app bundles (numeric -> R2 id).
+    from pathlib import Path
+    ids = json.loads((Path(__file__).parent / "app_mandi_ids.json").read_text(encoding="utf-8"))["ids"]
     rows = client.rpc("used_mandis").execute().data or []
-    return {r["used_mandis"] if isinstance(r, dict) else r for r in rows}
+    return {r["r2_id"] or ids.get(str(r["mandi_id"])) for r in rows} - {None}
 
 
 def main() -> None:

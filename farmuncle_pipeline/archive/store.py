@@ -7,7 +7,7 @@ import os
 
 def cache_seconds(key: str) -> int:
     """Browser/CDN cache time for a JSON file (spec 2.3): manifest 60 s, live files 10 min, everything else 1 h."""
-    return 60 if key == "meta/manifest.json" else 600 if key.startswith("live/") else 3600
+    return 60 if key == "meta/manifest.json" else 600 if key.startswith(("live/", "home/")) else 3600
 
 
 class R2Store:
@@ -50,6 +50,8 @@ class R2Store:
 
     def put(self, key: str, data: bytes, content_type: str = "application/octet-stream") -> None:
         extra = {"CacheControl": f"public, max-age={cache_seconds(key)}"} if content_type == "application/json" else {}
+        if content_type == "application/json":
+            content_type += "; charset=utf-8"  # without it Android's fetch decodes "·" in names as Latin-1 ("Â·")
         self._client.put_object(Bucket=self.bucket, Key=key, Body=data, ContentType=content_type, **extra)
 
     def get(self, key: str) -> bytes:

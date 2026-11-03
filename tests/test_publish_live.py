@@ -49,8 +49,23 @@ def test_mandi_and_crop_files_follow_contract():
     assert hubli["updated_at"] == "2026-10-29T09:00:00+05:30"
     assert out["live/mandi/mh.pune.pune.json"]["items"] == []  # reported only yesterday
     assert out["live/crop/onion/ka.json"]["rows"] == [
-        {"mandi_id": "ka.dharwad.hubli", "variety_id": "onion.red", "modal": 24.5, "min": 21.5, "max": 27.5, "prev_modal": 23.3}]
-    assert "live/crop/onion/mh.json" not in out  # nothing today in Maharashtra
+        {"mandi_id": "ka.dharwad.hubli", "variety_id": "onion.red", "grade": "faq", "date": TODAY, "modal": 24.5, "min": 21.5,
+         "max": 27.5, "prev_modal": 23.3, "prev_date": "2026-10-28", "then": {}}]
+    assert out["live/crop/onion/mh.json"]["rows"][0]["date"] == "2026-10-28"  # yesterday's price stays, with its date
+
+
+def test_crop_state_rows_keep_every_grade():
+    grades = GRADES + [{"id": 6, "name": "Local"}]
+    out = pl.build_files(prices=[price(1, 10, TODAY, 24.5, 100), price(1, 10, TODAY, 18.0, 100, gid=6)], mandis=MANDIS,
+                         crops=CROPS, varieties=VARIETIES, grades=grades, registry={}, today=date(2026, 10, 29), now=NOW)
+    rows = out["live/crop/onion/ka.json"]["rows"]
+    assert [(r["grade"], r["modal"]) for r in rows] == [("faq", 24.5), ("local", 18.0)]
+
+
+def test_crop_state_rows_keep_last_date_after_midnight():
+    out = build([price(1, 10, "2026-10-28", 23.3, 100), price(1, 10, "2026-10-25", 21.0, 100)])
+    (row,) = out["live/crop/onion/ka.json"]["rows"]
+    assert (row["date"], row["modal"], row["prev_modal"], row["prev_date"]) == ("2026-10-28", 23.3, 21.0, "2026-10-25")
 
 
 def test_slugs_are_frozen_and_unique():
@@ -113,7 +128,7 @@ class DB:
 def test_publish_writes_changed_only_and_manifest():
     store = Store()
     first = pl.publish(DB(PRICES), store, NOW)
-    assert first["written"] == first["files"] == 4
+    assert first["written"] == first["files"] == 5  # onion/mh too: Pune's yesterday price stays listed
     assert json.loads(store["catalog/mandis.json"])["version"] == 1
     assert [s["id"] for s in json.loads(store["catalog/states.json"])["states"]] == ["ka", "mh"]
     assert json.loads(store["meta/manifest.json"])["live_updated_at"] == "2026-10-29T09:00:00+05:30"
@@ -131,8 +146,9 @@ def test_catalogs_follow_contract():
     assert cat["catalog/states.json"]["states"] == [{"id": "ka", "name": "Karnataka"}, {"id": "mh", "name": "Maharashtra"}]
     hubli, dup = cat["catalog/mandis.json"]["mandis"][:2]
     assert hubli == {"id": "ka.dharwad.hubli", "name": "Hubli", "district": "ka.dharwad", "state": "ka", "lat": 15.36,
-                     "lng": 75.12, "status": "ACTIVE", "merged_into_id": None, "names": {}}
+                     "lng": 75.12, "status": "ACTIVE", "merged_into_id": None, "names": {}, "label": "Hubli", "approx": False}
     assert dup["merged_into_id"] == "ka.dharwad.hubli"
+    assert (dup["lat"], dup["lng"], dup["approx"]) == (15.36, 75.12, True)  # no coordinates: its district's centre
     onion, tomato = cat["catalog/crops.json"]["crops"]
     assert onion["category"] == "vegetable" and onion["unit"] == "kg"
     assert onion["varieties"] == [{"id": "onion.red", "name": "Red"}, {"id": "onion.other", "name": "Other"}]
@@ -164,3 +180,112 @@ def test_merged_variety_resolves_to_its_survivor():
     key_of = pl.make_key_fn(MANDIS, CROPS, reg, varieties)
     row = {"mandi_id": 1, "crop_id": 10, "variety_id": 101}
     assert key_of(row) == key_of({**row, "variety_id": 100}) == ("ka.dharwad.hubli", "onion", "onion.red")
+
+
+def test_crop_state_rows_carry_then_from_stats():
+    stats = {"keys": {"ka.dharwad.hubli|onion|onion.red|faq": {"7D": [20.0, "2026-10-22"]}}}
+    out = pl.build_files(prices=PRICES, mandis=MANDIS, crops=CROPS, varieties=VARIETIES, grades=GRADES, registry={},
+                         today=date(2026, 10, 29), now=NOW, stats=stats)
+    assert out["live/crop/onion/ka.json"]["rows"][0]["then"] == {"7D": [20.0, "2026-10-22"]}
+
+
+def test_full_run_writes_home_and_top_files_hourly_run_only_used():
+    store = Store()
+    pl.publish(DB(PRICES), store, NOW, all_homes=True)
+    hubli = json.loads(store["home/ka.dharwad.hubli.json"])
+    assert hubli["crops"][0]["crop"] == "onion" and hubli["crops"][0]["rows"][0]["modal"] == 24.5
+    assert "top/onion.json" in store
+    hourly = Store()
+    pl.publish(DB(PRICES), hourly, NOW)  # no user list: every home, but top/ only nightly
+    assert "home/ka.dharwad.hubli.json" in hourly and not [k for k in hourly if k.startswith("top/")]
+    quiet = Store()
+    pl.publish(DB(PRICES), quiet, NOW, used=set())  # a user list with nobody on it: no homes
+    assert not [k for k in quiet if k.startswith(("home/", "top/"))]
+
+
+def test_used_mandis_is_none_without_app_secrets(monkeypatch):
+    monkeypatch.delenv("APP_SUPABASE_URL", raising=False)
+    monkeypatch.delenv("APP_SUPABASE_KEY", raising=False)
+    assert pl.used_mandis() is None
+
+
+def test_used_mandis_reads_the_app_function(monkeypatch):
+    class App:
+        def rpc(self, name):
+            assert name == "used_mandis"
+            return self
+
+        def range(self, start, end):
+            return self
+
+        def execute(self):
+            return FakeResponse([{"mandi_id": 3, "r2_id": None}, {"mandi_id": None, "r2_id": "ka.kolar.kolar"},
+                                 {"mandi_id": 999999, "r2_id": None}])  # an id the map does not know is skipped
+    monkeypatch.setenv("APP_SUPABASE_URL", "https://x.supabase.co")
+    monkeypatch.setenv("APP_SUPABASE_KEY", "k")
+    assert pl.used_mandis(client=App()) == {"ap.kakinada.kakinada_urban", "ka.kolar.kolar"}
+
+
+def test_crop_state_budget_fits_every_grade_with_dates():
+    import random
+    rng = random.Random(1)
+    rows = [{"mandi_id": f"kl.district_{i % 14}.mandi_{i}", "variety_id": f"banana.v{v}", "grade": g, "date": f"2026-10-{20 + rng.randrange(9)}",
+             "modal": rng.randrange(1500, 6000) / 100, "min": rng.randrange(1000, 1500) / 100, "max": rng.randrange(6000, 9000) / 100,
+             "prev_modal": rng.randrange(1500, 6000) / 100, "prev_date": "2026-10-19",
+             "then": {"7D": [rng.randrange(1500, 6000) / 100, "2026-10-21"], "1M": [rng.randrange(1500, 6000) / 100, "2026-09-28"]}}
+            for i in range(120) for v in range(3) for g in ("faq", "local")]  # a busy state: 120 mandis, 3 varieties, 2 grades
+    pl._check_budget("live/crop/banana/kl.json", pl._encode({"v": 1, "rows": rows}))
+
+
+def test_used_mandis_falls_back_to_everyone_when_the_app_database_fails(monkeypatch):
+    class Broken:
+        def rpc(self, name):
+            raise RuntimeError("paused")
+    monkeypatch.setenv("APP_SUPABASE_URL", "https://x.supabase.co")
+    monkeypatch.setenv("APP_SUPABASE_KEY", "k")
+    assert pl.used_mandis(client=Broken()) is None
+
+
+def test_used_mandis_reads_past_the_1000_row_cap(monkeypatch):
+    class Paged:
+        def rpc(self, name):
+            return self
+
+        def range(self, start, end):
+            self.window = (start, end)
+            return self
+
+        def execute(self):
+            start, end = self.window
+            return FakeResponse([{"mandi_id": None, "r2_id": f"ka.x.m{i}"} for i in range(start, min(end + 1, 1500))])
+    monkeypatch.setenv("APP_SUPABASE_URL", "https://x.supabase.co")
+    monkeypatch.setenv("APP_SUPABASE_KEY", "k")
+    assert len(pl.used_mandis(client=Paged())) == 1500
+
+
+def test_a_merged_mandi_gets_its_survivors_home_file():
+    store = Store()
+    pl.publish(DB(PRICES), store, NOW, all_homes=True)
+    dup = json.loads(store["home/ka.dharwad.hubli_dup.json"])
+    assert dup["mandi_id"] == "ka.dharwad.hubli" and dup["crops"]
+
+
+def test_state_catalogs_list_active_mandis_with_places():
+    reg = pl.assign_slugs(CROPS, VARIETIES, {})
+    cat = pl.build_catalogs(mandis=MANDIS, crops=CROPS, varieties=VARIETIES, codes={"Karnataka": "ka", "Maharashtra": "mh"}, registry=reg)
+    ka = cat["catalog/state/ka.json"]
+    assert ka == {"v": 1, "state": "ka", "mandis": [{"id": "ka.dharwad.hubli", "label": "Hubli", "district": "ka.dharwad", "lat": 15.36, "lng": 75.12}]}
+    assert cat["catalog/points.json"] == {"v": 1, "states": ["ka", "mh"], "points": [[15.36, 75.12, 0], [18.5, 73.8, 1]]}
+
+
+def test_home_names_its_own_place():
+    store = Store()
+    pl.publish(DB(PRICES), store, NOW, all_homes=True)
+    hubli = json.loads(store["home/ka.dharwad.hubli.json"])
+    assert (hubli["lat"], hubli["lng"]) == (15.36, 75.12)
+
+
+def test_files_uploaded_before_the_charset_fix_are_uploaded_again():
+    import hashlib
+    old = hashlib.sha256(json.dumps({"a": 1}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:16]
+    assert pl.content_hash({"a": 1, "updated_at": "x"}) != old

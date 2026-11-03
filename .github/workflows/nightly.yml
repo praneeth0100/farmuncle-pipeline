@@ -1,0 +1,56 @@
+name: nightly
+
+# The night's steps in a fixed order, in one job, so nothing can cancel one step while another waits:
+#   1. archive_aged: days older than the live window move to R2 Parquet and leave the warehouse
+#   2. publish_analytics: chart files and change stats from the archive plus the warehouse
+#   3. publish_live --all-homes: every mandi's home file and the top/ files
+# Steps 2 and 3 run even if step 1 fails; analytics then reads the warehouse back to the last archived day.
+on:
+  schedule:
+    - cron: "45 20 * * *" # 02:15 IST, after daily_rewrite (14:30 UTC) has had time to finish
+  workflow_dispatch: {}
+
+concurrency:
+  group: warehouse-writer # archive_aged deletes warehouse days; archive_history must wait
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      MANDI_R2_ACCOUNT_ID: ${{ secrets.MANDI_R2_ACCOUNT_ID }}
+      MANDI_R2_ACCESS_KEY_ID: ${{ secrets.MANDI_R2_ACCESS_KEY_ID }}
+      MANDI_R2_SECRET_ACCESS_KEY: ${{ secrets.MANDI_R2_SECRET_ACCESS_KEY }}
+      MANDI_R2_BUCKET: ${{ secrets.MANDI_R2_BUCKET }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      - name: Archive aged days
+        env:
+          DATA_GOV_API_KEY: ${{ secrets.DATA_GOV_API_KEY }}
+          HISTORY_SUPABASE_URL: ${{ secrets.HISTORY_SUPABASE_URL }}
+          HISTORY_SUPABASE_SERVICE_KEY: ${{ secrets.HISTORY_SUPABASE_SERVICE_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: python -m farmuncle_pipeline.ingestion.archive_aged
+
+      - name: Charts and change stats
+        if: ${{ !cancelled() }}
+        run: python -m farmuncle_pipeline.ingestion.publish_analytics
+
+      - name: Every home file and the top files
+        if: ${{ !cancelled() }}
+        env:
+          APP_SUPABASE_URL: ${{ secrets.APP_SUPABASE_URL }}
+          APP_SUPABASE_KEY: ${{ secrets.APP_SUPABASE_KEY }}
+        run: python -m farmuncle_pipeline.ingestion.publish_live --all-homes

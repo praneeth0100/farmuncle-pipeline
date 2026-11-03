@@ -9,7 +9,7 @@ name: archive_history
 on:
   schedule:
     # backstop; one window per run (about 40 min). Skips 21:20 UTC so it never queues behind (and so cancels) the nightly
-    # archive_aged: GitHub keeps one waiting run per concurrency group and drops the older one.
+    # job: GitHub keeps one waiting run per concurrency group and drops the older one.
     - cron: "20 0-18/3 * * *"
   workflow_dispatch:
     inputs:
@@ -58,13 +58,13 @@ jobs:
           args="--budget-minutes 300 --max-windows 1"
           if [ -n "${{ github.event.inputs.max_windows }}" ]; then args="$args --max-windows ${{ github.event.inputs.max_windows }}"; fi
           python -m farmuncle_pipeline.ingestion.archive_history $args | tee history.log
-          # The nightly archive_aged (20:45 UTC) shares this concurrency group. Starting the next window while it waits
+          # The nightly job (20:45 UTC) shares this concurrency group. Starting the next window while it waits
           # would cancel it, and then publish_analytics never runs. So until it has succeeded since its last slot, hand over.
           slot=$(date -u -d "$([ "$(date -u +%H%M)" -ge 2045 ] && echo today || echo yesterday) 20:45" +%Y-%m-%dT%H:%M:%SZ)
-          aged=$(gh run list --workflow archive_aged.yml -L 10 --json createdAt,status,conclusion --jq "[.[] | select(.createdAt >= \"$slot\")] | if any(.conclusion == \"success\") then \"done\" elif any(.status != \"completed\") then \"waiting\" else \"missing\" end")
+          aged=$(gh run list --workflow nightly.yml -L 10 --json createdAt,status,conclusion --jq "[.[] | select(.createdAt >= \"$slot\")] | if any(.conclusion == \"success\") then \"done\" elif any(.status != \"completed\") then \"waiting\" else \"missing\" end")
           if [ "$aged" != "done" ]; then
-            if [ "$aged" = "missing" ]; then gh workflow run archive_aged.yml --ref main; fi
-            echo "archive_aged has not finished since $slot ($aged); it goes first, the backstop schedule resumes the backfill"
+            if [ "$aged" = "missing" ]; then gh workflow run nightly.yml --ref main; fi
+            echo "nightly has not finished since $slot ($aged); it goes first, the backstop schedule resumes the backfill"
           elif grep -qE "windows completed this run: [1-9]" history.log; then
             gh workflow run archive_history.yml --ref main
             echo "next window started"

@@ -22,6 +22,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from farmuncle_pipeline.archive.export import PAGE
 from farmuncle_pipeline.archive.store import R2Store
+from farmuncle_pipeline.ingestion.geo import fill_coords, labels
 
 IST = timezone(timedelta(hours=5, minutes=30))
 WINDOW_DAYS = 3  # the warehouse keeps 3 days; older days come from the R2 archive (read only)
@@ -175,13 +176,15 @@ def build_files(*, prices, mandis, crops, varieties, grades, registry, today: da
 def build_catalogs(*, mandis, crops, varieties, codes: dict, registry: dict) -> dict:
     """Pure: {catalog key: payload without "version"}. Merged mandis stay listed so the app can follow merged_into_id."""
     pid = {m["id"]: m["public_id"] for m in mandis}
+    coords, label = fill_coords(mandis), labels(mandis)
     live = [m for m in mandis if m.get("status") == "ACTIVE" and not m.get("merged_into_id")]
     states = sorted(({"id": codes[s], "name": s} for s in {m["state"] for m in live} if s in codes), key=lambda s: s["id"])
     mandi_rows = [{
         "id": m["public_id"], "name": m.get("display_name") or m["name"], "district": ".".join(m["public_id"].split(".")[:2]),
         "state": codes.get(m["state"]) or m["public_id"].split(".")[0],
-        "lat": m.get("latitude"), "lng": m.get("longitude"), "status": m.get("status"),
-        "merged_into_id": pid.get(m.get("merged_into_id")), "names": {}  # shortcut: no translations in the warehouse yet
+        "lat": coords.get(m["public_id"], (None,))[0], "lng": coords.get(m["public_id"], (None, None))[1], "status": m.get("status"),
+        "merged_into_id": pid.get(m.get("merged_into_id")), "names": {},  # shortcut: no translations in the warehouse yet
+        "label": label[m["public_id"]], "approx": coords.get(m["public_id"], (None, None, False))[2],
     } for m in sorted(mandis, key=lambda m: m["public_id"])]
     reg_c, reg_v = registry["crops"], registry["varieties"]
     by_crop = defaultdict(list)

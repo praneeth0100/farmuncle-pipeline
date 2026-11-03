@@ -131,8 +131,9 @@ def test_catalogs_follow_contract():
     assert cat["catalog/states.json"]["states"] == [{"id": "ka", "name": "Karnataka"}, {"id": "mh", "name": "Maharashtra"}]
     hubli, dup = cat["catalog/mandis.json"]["mandis"][:2]
     assert hubli == {"id": "ka.dharwad.hubli", "name": "Hubli", "district": "ka.dharwad", "state": "ka", "lat": 15.36,
-                     "lng": 75.12, "status": "ACTIVE", "merged_into_id": None, "names": {}}
+                     "lng": 75.12, "status": "ACTIVE", "merged_into_id": None, "names": {}, "label": "Hubli", "approx": False}
     assert dup["merged_into_id"] == "ka.dharwad.hubli"
+    assert (dup["lat"], dup["lng"], dup["approx"]) == (15.36, 75.12, True)  # no coordinates: its district's centre
     onion, tomato = cat["catalog/crops.json"]["crops"]
     assert onion["category"] == "vegetable" and onion["unit"] == "kg"
     assert onion["varieties"] == [{"id": "onion.red", "name": "Red"}, {"id": "onion.other", "name": "Other"}]

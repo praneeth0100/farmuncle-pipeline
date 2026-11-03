@@ -239,9 +239,12 @@ def archive_rows(store, today: date) -> list[dict]:
         return [r for rows in pool.map(read, days) for r in rows]
 
 
+HASH_SALT = "utf8-charset"  # changing it re-uploads every file once (done when JSON started carrying charset=utf-8)
+
+
 def content_hash(payload: dict) -> str:
     body = {k: v for k, v in payload.items() if k != "updated_at"}
-    return hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:16]
+    return hashlib.sha256((HASH_SALT + json.dumps(body, sort_keys=True, separators=(",", ":"))).encode()).hexdigest()[:16]
 
 
 def _encode(payload) -> bytes:

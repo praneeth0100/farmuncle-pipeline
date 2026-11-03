@@ -50,6 +50,8 @@ class R2Store:
 
     def put(self, key: str, data: bytes, content_type: str = "application/octet-stream") -> None:
         extra = {"CacheControl": f"public, max-age={cache_seconds(key)}"} if content_type == "application/json" else {}
+        if content_type == "application/json":
+            content_type += "; charset=utf-8"  # without it Android's fetch decodes "·" in names as Latin-1 ("Â·")
         self._client.put_object(Bucket=self.bucket, Key=key, Body=data, ContentType=content_type, **extra)
 
     def get(self, key: str) -> bytes:

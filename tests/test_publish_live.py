@@ -283,3 +283,9 @@ def test_home_names_its_own_place():
     pl.publish(DB(PRICES), store, NOW, all_homes=True)
     hubli = json.loads(store["home/ka.dharwad.hubli.json"])
     assert (hubli["lat"], hubli["lng"]) == (15.36, 75.12)
+
+
+def test_files_uploaded_before_the_charset_fix_are_uploaded_again():
+    import hashlib
+    old = hashlib.sha256(json.dumps({"a": 1}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:16]
+    assert pl.content_hash({"a": 1, "updated_at": "x"}) != old

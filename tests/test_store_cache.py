@@ -11,5 +11,6 @@ def test_json_gets_the_spec_cache_times_and_other_files_none():
     c = Client()
     R2Store(c, "b").put("live/crop/onion/ka.json", b"{}", "application/json")
     assert c.kw["CacheControl"] == "public, max-age=600"
+    assert c.kw["ContentType"] == "application/json; charset=utf-8"  # phones decode a bare application/json as Latin-1
     R2Store(c, "b").put("facts/daily/date=2026-10-20.parquet", b"x")
     assert "CacheControl" not in c.kw

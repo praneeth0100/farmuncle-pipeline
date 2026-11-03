@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import io
 import math
+import sys
 import zlib
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -43,6 +44,13 @@ COLS = ["mandi_id", "crop_id", "variety_id", "grade_id", "price_date", "modal_pr
 
 def archive_days(store) -> list[date]:
     return sorted(date.fromisoformat(k[len("facts/daily/date="):-len(".parquet")]) for k in store.list("facts/daily/date="))
+
+
+def warehouse_start(archived: list[date], today: date) -> date:
+    """First day to read from the warehouse: the usual window, or earlier when archive_aged missed nights and newer days
+    are still only in the warehouse (reading a fixed window would leave a hole in every file)."""
+    window = today - timedelta(days=WINDOW_DAYS)
+    return min(window, max(archived) + timedelta(days=1)) if archived else window
 
 
 def read_day(store, day: date) -> list[dict]:
@@ -268,8 +276,9 @@ def publish(db, store, now: datetime | None = None) -> dict:
     key_of = make_key_fn(mandis, crops, reg, varieties)
     grade_name = {g["id"]: slugify(g["name"]) for g in _fetch(db, "grades", "id,name")}
     series: dict = defaultdict(dict)
-    window_start = today - timedelta(days=WINDOW_DAYS)
-    old = [d for d in archive_days(store) if d < window_start]
+    archived = archive_days(store)
+    window_start = warehouse_start(archived, today)
+    old = [d for d in archived if d < window_start]
     with ThreadPoolExecutor(16) as pool:
         for i in range(0, len(old), 32):  # a batch at a time keeps the raw rows from piling up
             for rows in pool.map(lambda d: read_day(store, d), old[i:i + 32]):
@@ -326,8 +335,13 @@ def main() -> None:
     if not R2Store.configured():
         print("[publish_analytics] MANDI_R2_* credentials are not set; nothing published.")
         return
+    store = R2Store.from_env()
+    built = (_get_json(store, MANIFEST_KEY) or {}).get("analytics_built_at") or ""
+    if "--if-stale" in sys.argv and built[:10] == datetime.now(IST).date().isoformat():
+        print(f"[publish_analytics] already built today ({built}); nothing to do.")
+        return
     db = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_KEY"])
-    print(f"[publish_analytics] {publish(db, R2Store.from_env())}")
+    print(f"[publish_analytics] {publish(db, store)}")
 
 
 if __name__ == "__main__":

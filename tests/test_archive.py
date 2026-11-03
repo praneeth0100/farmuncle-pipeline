@@ -152,14 +152,20 @@ def test_next_window_is_ten_days_ending_at_the_given_day():
 
 
 class _State:
-    def __init__(self, next_end=None):
-        self.next_end, self.done = next_end, False
+    def __init__(self, next_end=None, outages=0):
+        self.next_end, self.done, self.outage_tries = next_end, False, outages
 
     def get(self):
         return self.next_end
 
     def set(self, next_end, done=False):
-        self.next_end, self.done = next_end, done
+        self.next_end, self.done, self.outage_tries = next_end, done, 0
+
+    def outages(self):
+        return self.outage_tries
+
+    def note_outage(self):
+        self.outage_tries += 1
 
 
 def _deps(log, *, fail_ingest_on=None, fail_archive=False):
@@ -392,6 +398,17 @@ def test_a_window_where_every_day_fails_is_an_outage_no_try_is_counted_and_it_is
                                                 record=lambda day, status, **kw: recorded.append((day, status)), **deps)
     assert recorded == []  # the database or the feed was down: nothing counts towards a day's 3 tries
     assert done == 0 and state.next_end == date(2026, 10, 25)  # the same window runs again next time
+    assert state.outage_tries == 1
+
+
+def test_a_window_that_failed_entirely_three_times_is_recorded_as_failed_and_left():
+    log, state, recorded = [], _State(next_end=date(2026, 10, 25), outages=2), []
+    deps = _deps(log)
+    deps["ingest_day"] = _failing_ingest(log, {date(2026, 10, d) for d in range(16, 26)})
+    done = run_backward(today=date(2026, 10, 29), oldest=date(2026, 8, 1), state=state, max_windows=1,
+                        record=lambda day, status, **kw: recorded.append((day, status)), **deps)
+    assert len([r for r in recorded if r[1] == "FAILED"]) == 10  # the first run and two redos all failed: move on
+    assert done == 1 and state.next_end == date(2026, 10, 15) and state.outage_tries == 0
 
 
 def test_a_failed_retry_is_not_counted_when_the_window_after_it_also_failed_entirely():

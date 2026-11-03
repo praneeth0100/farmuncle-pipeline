@@ -17,6 +17,7 @@ from datetime import date, timedelta
 from farmuncle_pipeline.archive.tracker import incomplete_reason
 
 DEFAULT_OLDEST = date(2016, 11, 1)
+OUTAGE_REDOS = 2  # a window where every day failed runs twice more; then its days are recorded FAILED and it moves on
 LIVE_DAYS = 3  # days kept in the warehouse for the app; keep equal to delete_price_window's guard
 
 
@@ -172,12 +173,13 @@ def run_backward(
         # A day that fails never stops the window: the others are archived and deleted. A failed day
         # stays in the warehouse (nothing is deleted without a verified upload) and is listed for retry.
         failed = _settle(window.days(), **settle)
-        if not any(went_through(a, k) for a, k in pending):
+        if not any(went_through(a, k) for a, k in pending) and state.outages() < OUTAGE_REDOS:
             flush(outage=True)
+            state.note_outage()
             print(f"[archive_history] every day of {window.start}..{window.end} failed: treated as an outage; "
-                  "no try counted, the window runs again next time")
+                  f"no try counted, the window runs again next time (redo {state.outages()} of {OUTAGE_REDOS})")
             break
-        flush()
+        flush()  # after the last redo an all-failed window's days are recorded FAILED like any other
         if after_window:
             after_window(window)
         for day, reason in failed:

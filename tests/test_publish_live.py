@@ -221,3 +221,14 @@ def test_used_mandis_reads_the_app_function(monkeypatch):
     monkeypatch.setenv("APP_SUPABASE_URL", "https://x.supabase.co")
     monkeypatch.setenv("APP_SUPABASE_KEY", "k")
     assert pl.used_mandis(client=App()) == {"ap.kakinada.kakinada_urban", "ka.kolar.kolar"}
+
+
+def test_crop_state_budget_fits_every_grade_with_dates():
+    import random
+    rng = random.Random(1)
+    rows = [{"mandi_id": f"kl.district_{i % 14}.mandi_{i}", "variety_id": f"banana.v{v}", "grade": g, "date": f"2026-10-{20 + rng.randrange(9)}",
+             "modal": rng.randrange(1500, 6000) / 100, "min": rng.randrange(1000, 1500) / 100, "max": rng.randrange(6000, 9000) / 100,
+             "prev_modal": rng.randrange(1500, 6000) / 100, "prev_date": "2026-10-19",
+             "then": {"7D": [rng.randrange(1500, 6000) / 100, "2026-10-21"], "1M": [rng.randrange(1500, 6000) / 100, "2026-09-28"]}}
+            for i in range(120) for v in range(3) for g in ("faq", "local")]  # a busy state: 120 mandis, 3 varieties, 2 grades
+    pl._check_budget("live/crop/banana/kl.json", pl._encode({"v": 1, "rows": rows}))

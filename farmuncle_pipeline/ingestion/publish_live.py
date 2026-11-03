@@ -31,7 +31,8 @@ WINDOW_DAYS = 3  # the warehouse keeps 3 days; older days come from the R2 archi
 RECENT_CROPS_DAYS = 14  # spec 6.2; prev_modal and recent_crops look back this far
 WRITERS = 16
 CATALOG_BUMP_EVERY = timedelta(hours=24)
-BUDGET = {"live/mandi/": 10_000, "live/crop/": 10_000, "catalog/mandis.json": 250_000}  # gzipped bytes, spec 6.7
+# gzipped bytes, spec 6.7; live/crop holds every grade with its date and earlier prices (Screen 2), so it is larger
+BUDGET = {"live/mandi/": 10_000, "live/crop/": 40_000, "catalog/mandis.json": 250_000}
 HASHES_KEY, MANIFEST_KEY, SLUGS_KEY = "meta/live_hashes.json", "meta/manifest.json", "meta/crop_slugs.json"
 STATS_KEY = "meta/key_stats.json"  # written nightly by publish_analytics
 

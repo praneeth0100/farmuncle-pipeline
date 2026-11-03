@@ -176,6 +176,8 @@ def run_backward(
         if not any(went_through(a, k) for a, k in pending) and state.outages() < OUTAGE_REDOS:
             flush(outage=True)
             state.note_outage()
+            for day, reason in failed:
+                print(f"[archive_history] {day} failed: {reason}")
             print(f"[archive_history] every day of {window.start}..{window.end} failed: treated as an outage; "
                   f"no try counted, the window runs again next time (redo {state.outages()} of {OUTAGE_REDOS})")
             break

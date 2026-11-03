@@ -86,7 +86,7 @@ def build_home(*, homes, latest, neighbours, coords, labels, stats, odd, today: 
             "stats_as_of": stats.get("as_of"),
             "mandis": {m: {"label": labels.get(m, m), "km": km, **({"approx": True} if coords.get(m, (0, 0, False))[2] else {})}
                        for m, km in used.items()},
-            "crops": [{"crop": crop, "rows": [item for _, item, _ in sorted(items, key=lambda x: (-x[0], x[1]["variety"], x[1]["grade"] or ""))][:ROWS_PER_CROP]}
+            "crops": [{"crop": crop, "rows": [item for _, item, _ in sorted(items, key=lambda x: (not x[2], -x[0], x[1]["variety"], x[1]["grade"] or ""))][:ROWS_PER_CROP]}
                       for crop, items in ranked]}
     return out
 

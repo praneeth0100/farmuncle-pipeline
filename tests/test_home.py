@@ -125,3 +125,10 @@ def test_home_lists_own_crops_first_then_fresh_then_old():
               key("b", crop="okra", variety="okra.x"): r(T, 40),
               key("h", crop="beans", variety="beans.x"): r("2026-10-30", 40)}
     assert [c["crop"] for c in build(latest)["home/h.json"]["crops"]] == ["beans", "onion", "okra", "garlic"]
+
+
+def test_home_keeps_its_own_rows_when_a_crop_has_many():
+    latest = {key(m, grade=f"g{i}"): r(T, 20 + i) for i in range(7) for m in ("a", "b")}  # 7 grades nearby, each at 2 mandis
+    latest[key("h", grade="rare")] = r(Y, 15)  # the farmer's own mandi trades a grade nobody else does
+    rows = rows_of(build(latest))
+    assert len(rows) == 6 and (rows[0]["grade"], rows[0]["mandi"]) == ("rare", "h")

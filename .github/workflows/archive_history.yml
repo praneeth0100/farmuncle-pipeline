@@ -66,7 +66,8 @@ jobs:
             if [ "$aged" = "missing" ]; then gh workflow run nightly.yml --ref main; fi
             echo "nightly has not finished since $slot ($aged); it goes first, the backstop schedule resumes the backfill"
           elif grep -qE "windows completed this run: [1-9]" history.log; then
-            gh workflow run archive_history.yml --ref main
+            # GitHub's dispatch API sometimes answers 500; one failed call stopped the chain for hours (4 Nov), so try a few times.
+            for wait in 0 15 60 180; do sleep $wait; gh workflow run archive_history.yml --ref main && break; done
             echo "next window started"
           else
             echo "no window finished; loop stops here (done, or waiting on the feed)"

@@ -19,6 +19,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 
 from farmuncle_pipeline.archive.export import PAGE
 from farmuncle_pipeline.archive.store import R2Store
@@ -359,6 +360,10 @@ def publish(db, store, now: datetime | None = None, *, all_homes: bool = False, 
     manifest = _get_json(store, MANIFEST_KEY) or {}
     version = int(manifest.get("catalog_version") or 1)
     catalogs = build_catalogs(mandis=mandis, crops=crops, varieties=varieties, codes=codes, registry=registry)
+    # The app's onboarding mandi list (numeric ids, the same file the app bundles), served from R2 instead of Supabase.
+    # Copy assets/data/mandi-catalogue-v2.json from the app whenever its mandi_catalogue changes.
+    packed = json.loads((Path(__file__).parent / "app_mandis.json").read_text(encoding="utf-8"))
+    catalogs["catalog/app_mandis.json"] = {k: v for k, v in packed.items() if k != "version"} | {"v": 1}
     new = {k: content_hash(p) for k, p in catalogs.items()}
     write, version = catalog_step(any(hashes.get(k) != h for k, h in new.items()), version, hashes, now, first=not any(k in hashes for k in new))
     if write:
@@ -390,7 +395,6 @@ def used_mandis(client=None) -> set[str] | None:
         from supabase import create_client
         client = create_client(os.environ["APP_SUPABASE_URL"], os.environ["APP_SUPABASE_KEY"])
     # Profiles hold the app's numeric mandi ids; app_mandi_ids.json is the same map the app bundles (numeric -> R2 id).
-    from pathlib import Path
     ids = json.loads((Path(__file__).parent / "app_mandi_ids.json").read_text(encoding="utf-8"))["ids"]
     rows, start = [], 0
     try:

@@ -131,6 +131,8 @@ def test_publish_writes_changed_only_and_manifest():
     assert first["written"] == first["files"] == 5  # onion/mh too: Pune's yesterday price stays listed
     assert json.loads(store["catalog/mandis.json"])["version"] == 1
     assert [s["id"] for s in json.loads(store["catalog/states.json"])["states"]] == ["ka", "mh"]
+    app = json.loads(store["catalog/app_mandis.json"])  # the onboarding mandi list, so the app stops reading it from Supabase
+    assert len(app["markets"]) > 2700 and {"states", "districts", "capitals", "fetchedAt"} <= app.keys()
     assert json.loads(store["meta/manifest.json"])["live_updated_at"] == "2026-10-29T09:00:00+05:30"
     assert set(json.loads(store["meta/crop_slugs.json"])["crops"].values()) == {"onion", "tomato"}
     later = datetime(2026, 10, 29, 10, 0, tzinfo=pl.IST)

@@ -183,6 +183,12 @@ class ResolvedEntity:
     first_seen_this_run: bool
 
 
+def forget_reference(client) -> None:
+    """Drop the reference lists kept on a database client, so the next preload reads them again (after a refresh)."""
+    if getattr(client, "_farmuncle_reference", None) is not None:
+        client._farmuncle_reference = None
+
+
 class IdentityClient:
     """
     Purpose:

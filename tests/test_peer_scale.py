@@ -149,3 +149,20 @@ def test_reference_lists_load_once_per_database_client_not_once_per_day():
         identity.preload()
         assert identity.crop_medians == {10: 40.5}
     assert calls.count("crop_price_medians") == 1 and calls.count("per_kg_pairs") == 1
+
+
+def test_forgetting_the_reference_makes_the_next_day_load_the_refreshed_lists():
+    from farmuncle_pipeline.core.identity_client import forget_reference
+    calls = []
+
+    class _Rpc(FakeIdentityDBClient):
+        def rpc(self, name, params=None):
+            calls.append(name)
+            return type("R", (), {"execute": lambda s: type("D", (), {"data": []})()})()
+
+    db = _Rpc(mandis=[_KNOWN_MANDI], crops=[_KNOWN_CROP], rpc_responses={})
+    IdentityClient(db).preload()
+    forget_reference(db)  # the backfill refreshed the reference tables
+    IdentityClient(db).preload()
+    IdentityClient(db).preload()
+    assert calls.count("per_kg_pairs") == 2

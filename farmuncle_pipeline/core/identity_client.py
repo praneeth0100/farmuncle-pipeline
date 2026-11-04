@@ -448,22 +448,32 @@ class IdentityClient:
             (row["variety_id"], row["normalized_name"]): row["id"] for row in grade_rows
         }
         self._preloaded = True
-        self.per_kg_pairs = self._load_per_kg_pairs()
-        self.crop_medians = self._load_crop_medians()
+        # Loaded once per database client (one run), not once per day pulled: each load scans 180 days of prices,
+        # and the backfill's ~20 loads a run used up the warehouse's disk budget. A failed load is retried next time.
+        cached = getattr(self._client, "_farmuncle_reference", None)
+        if cached is None:
+            cached = (self._load_per_kg_pairs(), self._load_crop_medians())
+            if cached[0] is not None and cached[1] is not None:
+                try:
+                    self._client._farmuncle_reference = cached
+                except AttributeError:  # a client that takes no attributes just loads every time
+                    pass
+        self.per_kg_pairs = cached[0] or frozenset()
+        self.crop_medians = cached[1] or {}
 
-    def _load_per_kg_pairs(self) -> frozenset:
+    def _load_per_kg_pairs(self) -> frozenset | None:
         try:
             data = self._client.rpc("per_kg_pairs", {}).execute().data or []
             return frozenset((int(r["mandi_id"]), int(r["crop_id"])) for r in data)
         except Exception:  # no evidence -> assume per quintal, never guess per kg
-            return frozenset()
+            return None
 
-    def _load_crop_medians(self) -> dict:
+    def _load_crop_medians(self) -> dict | None:
         try:
             data = self._client.rpc("crop_price_medians", {}).execute().data or []
             return {int(r["crop_id"]): float(r["median"]) for r in data}
         except Exception:  # no peers -> prices are left as converted
-            return {}
+            return None
 
     def resolve_mandi(
         self,

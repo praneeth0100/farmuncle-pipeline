@@ -131,3 +131,21 @@ def test_too_high_end_to_end():
     row = _process(_identity({10: 40.0}), modal_price="400000", min_price="350000", max_price="450000")
     assert (row["modal_price"], row["min_price"], row["max_price"]) == (40.0, 35.0, 45.0)
     assert row["quality_components"]["peer_scaled"] == 0.01
+
+
+def test_reference_lists_load_once_per_database_client_not_once_per_day():
+    """The backfill makes a new IdentityClient for every day it pulls; reloading these scanned 180 days each time."""
+    calls = []
+
+    class _Rpc(FakeIdentityDBClient):
+        def rpc(self, name, params=None):
+            calls.append(name)
+            data = [{"crop_id": 10, "median": "40.5"}] if name == "crop_price_medians" else []
+            return type("R", (), {"execute": lambda s: type("D", (), {"data": data})()})()
+
+    db = _Rpc(mandis=[_KNOWN_MANDI], crops=[_KNOWN_CROP], rpc_responses={})
+    for _ in range(3):
+        identity = IdentityClient(db)
+        identity.preload()
+        assert identity.crop_medians == {10: 40.5}
+    assert calls.count("crop_price_medians") == 1 and calls.count("per_kg_pairs") == 1

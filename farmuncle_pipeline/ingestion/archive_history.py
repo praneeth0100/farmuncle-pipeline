@@ -16,6 +16,7 @@ from farmuncle_pipeline.archive.history import DEFAULT_OLDEST, run_backward
 from farmuncle_pipeline.archive.state import SupabaseArchiveState
 from farmuncle_pipeline.archive.store import R2Store
 from farmuncle_pipeline.archive.tracker import failed_days, given_up_days, record_day, typical_rows
+from farmuncle_pipeline.core.identity_client import forget_reference
 from farmuncle_pipeline.core.resource2_pipeline import ingest_resource2_for_date
 from farmuncle_pipeline.ingest_common import validate_startup
 
@@ -46,7 +47,8 @@ def main() -> None:
         ingest_day=lambda d: ingest_resource2_for_date(ctx, target_date=d, job_name=JOB_NAME),
         archive_day=lambda d: archive_day(db, store, d),
         delete_window=lambda s, e: db.rpc("delete_price_window", {"p_start": s.isoformat(), "p_end": e.isoformat()}).execute(),
-        refresh_reference=lambda: db.rpc("refresh_price_reference").execute(),
+        # After the refresh the rest of the window must read the new lists, not the ones loaded at the start.
+        refresh_reference=lambda: (db.rpc("refresh_price_reference").execute(), forget_reference(db)),
         after_window=lambda w: export_catalog(db, store),
         leftover_days=lambda after, up_to: sorted({
             *(date.fromisoformat(r if isinstance(r, str) else r["price_days_between"])

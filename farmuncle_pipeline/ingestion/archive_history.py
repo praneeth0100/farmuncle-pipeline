@@ -18,7 +18,8 @@ from farmuncle_pipeline.archive.store import R2Store
 from farmuncle_pipeline.archive.tracker import failed_days, given_up_days, record_day, typical_rows
 from farmuncle_pipeline.core.identity_client import forget_reference
 from farmuncle_pipeline.core.resource2_pipeline import ingest_resource2_for_date
-from farmuncle_pipeline.ingest_common import validate_startup
+from farmuncle_pipeline.core.state_coverage import fetch_nationwide_total
+from farmuncle_pipeline.ingest_common import DEFAULT_HTTP_HEADERS, Resource, validate_startup
 
 JOB_NAME = "archive_history"
 _IST = timezone(timedelta(hours=5, minutes=30))
@@ -59,6 +60,13 @@ def main() -> None:
         typical_rows=typical_rows(db),
         has_unfinal_rows=lambda d: bool(db.table("mandi_daily_prices").select("id").eq("price_date", d.isoformat())
                                         .neq("source", "resource_2").limit(1).execute().data),
+        # One count request for a recent day, which always has data: None means the feed itself is down.
+        feed_up=lambda: fetch_nationwide_total(
+            resource=Resource.RESOURCE_2, api_key=ctx.secrets.data_gov_api_key,
+            date_str=(datetime.now(_IST).date() - timedelta(days=3)).strftime("%d/%m/%Y"),
+            url=ctx.app_config.runtime.api_base_resource_2, headers=DEFAULT_HTTP_HEADERS, timeout=ctx.app_config.runtime.api_timeout_seconds,
+            max_retries=ctx.app_config.runtime.max_retries, retry_delay_seconds=ctx.app_config.runtime.retry_delay_seconds,
+        ) is not None,
         max_windows=args.max_windows,
         budget_seconds=args.budget_minutes * 60,
     )

@@ -100,6 +100,8 @@ Provenance — what was reused from the v1 reference scripts and why:
 
 from __future__ import annotations
 
+import sys
+
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -377,7 +379,7 @@ def _fetch_all_resource_1_pages(
         )
         all_states_complete = False
 
-    return records, all_states_complete, total_pages, states_with_any_success
+    return records, all_states_complete, total_pages, states_with_any_success, breaker.tripped
 
 
 # =============================================================================
@@ -403,7 +405,7 @@ def _fetch_all_resource_1_pages(
 # =============================================================================
 # =============================================================================
 
-def run_live_tick(ctx) -> None:
+def run_live_tick(ctx) -> bool | None:
     """
     Purpose:
         Execute one full live_tick run: acquire the §12 concurrency
@@ -459,7 +461,7 @@ def run_live_tick(ctx) -> None:
         identity.preload()
         unit = identity.resolve_unit(_RAW_UNIT_DEFAULT)
 
-        records, pagination_complete, pages_fetched, states_with_any_success = _fetch_all_resource_1_pages(
+        records, pagination_complete, pages_fetched, states_with_any_success, feed_down = _fetch_all_resource_1_pages(
             supabase=supabase,
             batch_id=batch.id,
             raw_batch_id=raw_batch.id,
@@ -564,6 +566,7 @@ def run_live_tick(ctx) -> None:
         # invalidate. Non-fatal on failure; see price_cache.py.
         if rows_processed > 0:
             refresh_price_cache(supabase, caller="live_tick")
+        return feed_down
 
     except Exception as exc:
         error_summary = str(exc)[:500]
@@ -587,7 +590,11 @@ def run_live_tick(ctx) -> None:
 
 def main() -> None:
     ctx = validate_startup()
-    run_live_tick(ctx)
+    # A feed outage ends the run red: GitHub emails the owner, and publish_live (started only after a green pull) does not
+    # stamp hours-old prices as just published, so the freshness check sees them age.
+    if run_live_tick(ctx):
+        print("::error::data.gov.in did not answer (outage breaker tripped); no new prices this hour")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

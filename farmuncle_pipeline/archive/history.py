@@ -127,12 +127,14 @@ def run_backward(
     *, today: date, oldest: date, state, ingest_day, archive_day, delete_window, refresh_reference,
     after_window=None, max_windows: int | None = None, window_days: int = 10, live_days: int = LIVE_DAYS,
     budget_seconds: float | None = None, clock=time.monotonic, leftover_days=None, record=None, has_unfinal_rows=None,
-    typical_rows: int | None = None,
+    typical_rows: int | None = None, feed_up=None,
 ) -> int:
     """Process windows until `oldest`, the window cap or the time budget. Returns windows completed.
 
     `leftover_days(after, up_to)` lists days still in the warehouse between the processed range and the
     live window (days skipped earlier). They are retried first, every run, so a skipped day is not lost.
+    `feed_up()` asks the feed once whether it answers. A window that failed entirely while the feed is down waits for it,
+    however long that takes, and uses none of the redos; the redos are for a window that fails while the feed answers.
     """
     began = clock()
     done_count = 0
@@ -152,6 +154,9 @@ def run_backward(
             if not outage or went_through(a, k):
                 record(*a, **k)
         pending.clear()
+    if feed_up is not None and not feed_up():  # an outage: end in a minute; the next (hourly) run asks again
+        print("[archive_history] the feed does not answer; nothing tried this run, the next run checks again")
+        return 0
     frontier = state.get()
     if leftover_days and frontier:
         retry = sorted(leftover_days(frontier + timedelta(days=1), today - timedelta(days=live_days + 1)), reverse=True)
@@ -173,14 +178,20 @@ def run_backward(
         # A day that fails never stops the window: the others are archived and deleted. A failed day
         # stays in the warehouse (nothing is deleted without a verified upload) and is listed for retry.
         failed = _settle(window.days(), **settle)
-        if not any(went_through(a, k) for a, k in pending) and state.outages() < OUTAGE_REDOS:
-            flush(outage=True)
-            state.note_outage()
-            for day, reason in failed:
-                print(f"[archive_history] {day} failed: {reason}")
-            print(f"[archive_history] every day of {window.start}..{window.end} failed: treated as an outage; "
-                  f"no try counted, the window runs again next time (redo {state.outages()} of {OUTAGE_REDOS})")
-            break
+        if not any(went_through(a, k) for a, k in pending):
+            feed_down = feed_up is not None and not feed_up()
+            if feed_down or state.outages() < OUTAGE_REDOS:
+                flush(outage=True)
+                for day, reason in failed:
+                    print(f"[archive_history] {day} failed: {reason}")
+                if feed_down:
+                    print(f"[archive_history] every day of {window.start}..{window.end} failed and the feed does not answer: "
+                          "nothing counted; the window waits for the feed")
+                else:
+                    state.note_outage()
+                    print(f"[archive_history] every day of {window.start}..{window.end} failed: treated as an outage; "
+                          f"no try counted, the window runs again next time (redo {state.outages()} of {OUTAGE_REDOS})")
+                break
         flush()  # after the last redo an all-failed window's days are recorded FAILED like any other
         if after_window:
             after_window(window)

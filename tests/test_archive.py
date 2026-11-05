@@ -513,3 +513,36 @@ def test_a_partial_pull_is_recorded_as_failed_but_still_archived():
                  record=lambda day, status, **kw: recorded.append((day, status, kw.get("error"))), **deps)
     assert ("archive", date(2026, 10, 18)) in log
     assert recorded[0][1] == "FAILED" and recorded[0][2].startswith("partial pull")
+
+
+def test_a_window_that_fails_while_the_feed_is_down_is_never_recorded_however_many_redos():
+    # 5 Nov 2026: data.gov.in answered 502 for hours; a count of redos would have walked back through history burning tries.
+    log, state, recorded = [], _State(next_end=date(2026, 10, 25), outages=2), []
+    deps = _deps(log)
+    deps["ingest_day"] = _failing_ingest(log, {date(2026, 10, d) for d in range(16, 26)})
+    answers = iter([True, False])  # up when the run starts, down by the time the window has failed
+    done = run_backward(today=date(2026, 10, 29), oldest=date(2026, 8, 1), state=state, max_windows=1, feed_up=lambda: next(answers),
+                        record=lambda day, status, **kw: recorded.append((day, status)), **deps)
+    assert recorded == []  # no day loses a try while the feed itself is down
+    assert done == 0 and state.next_end == date(2026, 10, 25)  # the same window waits for the feed
+    assert state.outage_tries == 2  # and it uses none of the redos meant for a window that fails while the feed answers
+
+
+def test_a_window_that_fails_while_the_feed_answers_still_moves_on_after_its_redos():
+    log, state, recorded = [], _State(next_end=date(2026, 10, 25), outages=2), []
+    deps = _deps(log)
+    deps["ingest_day"] = _failing_ingest(log, {date(2026, 10, d) for d in range(16, 26)})
+    done = run_backward(today=date(2026, 10, 29), oldest=date(2026, 8, 1), state=state, max_windows=1, feed_up=lambda: True,
+                        record=lambda day, status, **kw: recorded.append((day, status)), **deps)
+    assert len([r for r in recorded if r[1] == "FAILED"]) == 10
+    assert done == 1 and state.next_end == date(2026, 10, 15)
+
+
+def test_a_run_that_starts_while_the_feed_is_down_stops_at_once_without_touching_any_day():
+    # Hourly backstop runs during an outage must end in a minute, not spend an hour retrying a server that answers 502.
+    log, state, recorded = [], _State(next_end=date(2026, 10, 25)), []
+    deps = _deps(log)
+    done = run_backward(today=date(2026, 10, 29), oldest=date(2026, 8, 1), state=state, max_windows=1, feed_up=lambda: False,
+                        leftover_days=lambda after, up_to: [date(2026, 10, 27)],
+                        record=lambda day, status, **kw: recorded.append((day, status)), **deps)
+    assert log == [] and recorded == [] and done == 0 and state.next_end == date(2026, 10, 25)

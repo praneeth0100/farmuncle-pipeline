@@ -8,9 +8,11 @@ name: archive_history
 # without waiting for the schedule. The schedule is a backstop in case a chained run fails.
 on:
   schedule:
-    # backstop; one window per run (about 40 min). Skips 21:20 UTC so it never queues behind (and so cancels) the nightly
-    # job: GitHub keeps one waiting run per concurrency group and drops the older one.
-    - cron: "20 0-18/3 * * *"
+    # backstop, hourly: after a feed outage the chain stops, and this restarts it within the hour (it was 3-hourly, and
+    # GitHub skipped slots, so a 4-hour outage on 5 Nov became a much longer stall). A run while the feed is still down
+    # ends in a minute. Skips 20:20 and 21:20 UTC so it never queues behind (and so cancels) the 20:45 nightly job:
+    # GitHub keeps one waiting run per concurrency group and drops the older one.
+    - cron: "20 0-19,22,23 * * *"
   workflow_dispatch:
     inputs:
       max_windows:
@@ -70,5 +72,5 @@ jobs:
             for wait in 0 15 60 180; do sleep $wait; gh workflow run archive_history.yml --ref main && break; done
             echo "next window started"
           else
-            echo "no window finished; loop stops here (done, or waiting on the feed)"
+            echo "no window finished; loop stops here (done, or waiting on the feed: the hourly schedule resumes it)"
           fi

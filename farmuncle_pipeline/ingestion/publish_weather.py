@@ -131,7 +131,7 @@ def main() -> None:
     if args.history:
         run_history(store, _http, now, args.limit)
     else:
-        run_forecast(store, _http, now, args.limit, os.environ.get("WEATHER_CONTACT", ""))
+        run_forecast(store, _http, now, args.limit, os.environ.get("WEATHER_CONTACT") or "github.com/praneeth0100/farmuncle-pipeline")
 
 
 if __name__ == "__main__":

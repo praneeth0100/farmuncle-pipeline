@@ -75,6 +75,9 @@ def test_tag_places_by_codes():
     assert s["districts"] == ["ka.mysuru"] and s["states"] == ["ka", "kl"]
     s = tag_places({"title": "Bengaluru traffic", "summary": "", "districts": [], "states": ["ka"]}, index)
     assert s["districts"] == []  # "bengaluru" is in two districts, so alone it names neither
+    lower = place_index([{"district": "ar.lower_subansiri", "state": "ar"}], [])
+    assert tag_places({"title": "Prices lower in October", "summary": "", "districts": [], "states": []}, lower)["districts"] == []
+    assert tag_places({"title": "Floods in Subansiri", "summary": "", "districts": [], "states": []}, lower)["districts"] == ["ar.lower_subansiri"]
 
 
 def test_same_story_keeps_indic_marks():

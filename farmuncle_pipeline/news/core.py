@@ -48,6 +48,10 @@ BLOCK_TERMS: dict[str, list[str]] = {
 }
 # The published catalog spells some states unlike the press does.
 STATE_ALIASES = {"kl": ["kerala"], "cg": ["chhattisgarh"], "dl": ["delhi"], "od": ["orissa"], "uk": ["uttaranchal"]}
+# District-name words that are also everyday words or people's names, so alone they name no district.
+NOT_PLACES = {"lower", "middle", "upper", "paschim", "purba", "uttara", "dakshina", "reddy", "gautam", "kabir", "ranga",
+              "siddharth", "chhota", "dehat", "thana", "champa", "yamuna", "dwarka", "malwa", "sathya", "sitharama", "alluri",
+              "somnath", "manpur", "khiri", "devbhumi", "sounth", "chattrapati", "jayashankar", "rajanna", "baroda"}
 STORY_KEYS = ("id", "title", "link", "outlet", "published", "lang", "image", "level", "districts", "states", "farm")
 KEEP_HOURS, MAX_STORIES, MAX_WIDTH = 72, 150, 800
 _ISO = "%Y-%m-%dT%H:%M:%SZ"
@@ -128,7 +132,7 @@ def place_index(mandis: list[dict], states: list[dict]) -> PlaceIndex:
         words = code.split(".", 1)[1].split("_")
         codes[" ".join(words)] = (state, code)
         for word in words:
-            if len(word) >= 5 and owners[word] == {code}:
+            if len(word) >= 5 and owners[word] == {code} and word not in NOT_PLACES:
                 codes.setdefault(word, (state, code))
     for s in states:
         for name in [s["name"].lower(), *STATE_ALIASES.get(s["id"], [])]:

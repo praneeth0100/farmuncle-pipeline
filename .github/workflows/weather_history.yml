@@ -1,0 +1,33 @@
+name: weather_history
+
+# Screen 3 weather files per grid cell (see docs/weather.md). Reads catalog/mandis.json from R2; never touches the warehouse.
+on:
+  schedule:
+    - cron: "20 21 * * 0" # Mon 02:50 IST, weekly: POWER data lags 2–3 days
+  workflow_dispatch: {}
+
+concurrency:
+  group: weather-history
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      - name: Weather history
+        env:
+          MANDI_R2_ACCOUNT_ID: ${{ secrets.MANDI_R2_ACCOUNT_ID }}
+          MANDI_R2_ACCESS_KEY_ID: ${{ secrets.MANDI_R2_ACCESS_KEY_ID }}
+          MANDI_R2_SECRET_ACCESS_KEY: ${{ secrets.MANDI_R2_SECRET_ACCESS_KEY }}
+          MANDI_R2_BUCKET: ${{ secrets.MANDI_R2_BUCKET }}
+          WEATHER_CONTACT: ${{ secrets.WEATHER_CONTACT }} # MET Norway requires a contact in the User-Agent
+        run: python -m farmuncle_pipeline.ingestion.publish_weather --history

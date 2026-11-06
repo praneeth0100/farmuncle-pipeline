@@ -107,3 +107,25 @@ def test_feed_list_is_valid():
     for f in feeds:
         assert f["url"].startswith("https://") and f["language"] in pn.LANGUAGES and f["level"] in pn.LEVELS
         assert (f["level"] in ("state", "city")) == bool(f["states"])
+
+
+def test_an_r2_read_error_is_not_a_first_run():
+    class Flaky(Store):
+        def get(self, key):
+            if key == "news/_state.json":
+                raise OSError("throttled")
+            return super().get(key)
+    store = Flaky(CATALOG | saved_state())
+    get = http({"https://h/agri": (200, {}, (FIX / "hindu_agri.xml").read_bytes()), "https://t/kn": (304, {}, b"")})
+    with pytest.raises(OSError):
+        pn.run(store, get, FEEDS, NOW)
+    assert json.loads(store.files["news/_state.json"])["stories"] == [SAVED]  # the saved 72 h are not overwritten
+
+
+def test_a_folded_twin_stays_in_the_saved_state():
+    twin = {**SAVED, "id": "s2", "title": "Old saved story again", "link": "https://t/s2", "districts": ["ka.mysuru"], "feed": "other"}
+    store = Store(CATALOG | {"news/_state.json": {"v": 1, "feeds": {}, "stories": [SAVED, twin]}})
+    pn.run(store, http({"https://h/agri": (304, {}, b""), "https://t/kn": (304, {}, b"")}), FEEDS, NOW)
+    assert {s["id"] for s in store.json("news/_state.json")["stories"]} == {"s1", "s2"}
+    shown = store.json("news/state/ka/kn.json")["stories"]
+    assert len(shown) == 1 and shown[0]["districts"] == ["ka.mysuru"]

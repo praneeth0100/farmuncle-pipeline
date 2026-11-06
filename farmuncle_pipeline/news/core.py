@@ -39,7 +39,8 @@ AGRI_TERMS: dict[str, list[str]] = {
     "ml": ["കൃഷി", "കർഷക", "വിള"],
 }
 BLOCK_TERMS: dict[str, list[str]] = {
-    "en": ["sensex", "nifty", "stock market", "share price", "cricket", "film", "movie", "bollywood", "box office"],
+    "en": ["sensex", "nifty", "stock market", "share price", "cricket", "film", "movie", "bollywood", "box office",
+           "monsoon session", "farmhouse"],
     "hi": ["सेंसेक्स", "निफ्टी", "शेयर बाजार", "क्रिकेट", "फिल्म"],
     "te": ["సెన్సెక్స్", "నిఫ్టీ", "స్టాక్ మార్కెట్", "క్రికెట్", "సినిమా"],
     "kn": ["ಸೆನ್ಸೆಕ್ಸ್", "ನಿಫ್ಟಿ", "ಷೇರು", "ಕ್ರಿಕೆಟ್", "ಸಿನಿಮಾ"],
@@ -49,7 +50,7 @@ BLOCK_TERMS: dict[str, list[str]] = {
 # The published catalog spells some states unlike the press does.
 STATE_ALIASES = {"kl": ["kerala"], "cg": ["chhattisgarh"], "dl": ["delhi"], "od": ["orissa"], "uk": ["uttaranchal"]}
 # District-name words that are also everyday words or people's names, so alone they name no district.
-NOT_PLACES = {"lower", "middle", "upper", "paschim", "purba", "uttara", "dakshina", "reddy", "gautam", "kabir", "ranga",
+NOT_PLACES = {"erode", "anand", "sagar", "krishna", "lower", "middle", "upper", "paschim", "purba", "uttara", "dakshina", "reddy", "gautam", "kabir", "ranga",
               "siddharth", "chhota", "dehat", "thana", "champa", "yamuna", "dwarka", "malwa", "sathya", "sitharama", "alluri",
               "somnath", "manpur", "khiri", "devbhumi", "sounth", "chattrapati", "jayashankar", "rajanna", "baroda"}
 STORY_KEYS = ("id", "title", "link", "outlet", "published", "lang", "image", "level", "districts", "states", "farm")
@@ -92,7 +93,7 @@ def parse_items(xml: bytes, feed: Feed) -> list[dict]:
     for e in feedparser.parse(xml).entries:
         title, link = _text(e.get("title", "")), (e.get("link") or "").strip()
         stamp = e.get("published_parsed") or e.get("updated_parsed")
-        if not title or not link.startswith(("https://", "http://")) or not stamp:
+        if not title or not link.startswith("https://") or not stamp:
             continue
         out.append({"id": hashlib.sha1(link.encode()).hexdigest(), "title": title, "link": link, "outlet": feed["outlet"],
                     "published": time.strftime(_ISO, stamp), "lang": feed["language"], "image": picture(e, feed.get("upgrade_images", False)),
@@ -128,9 +129,14 @@ def place_index(mandis: list[dict], states: list[dict]) -> PlaceIndex:
     for code in districts:
         for word in code.split(".", 1)[1].split("_"):
             owners[word].add(code)
+    full_states: dict[str, set[str]] = defaultdict(set)
+    for code, state in districts.items():
+        full_states[" ".join(code.split(".", 1)[1].split("_"))].add(state)
     for code, state in districts.items():
         words = code.split(".", 1)[1].split("_")
-        codes[" ".join(words)] = (state, code)
+        name = " ".join(words)
+        if len(full_states[name]) == 1 and name not in NOT_PLACES:  # Hamirpur is in two states: alone it names neither
+            codes.setdefault(name, (state, code))
         for word in words:
             if len(word) >= 5 and owners[word] == {code} and word not in NOT_PLACES:
                 codes.setdefault(word, (state, code))
@@ -164,12 +170,19 @@ def same_story(a: str, b: str) -> bool:
 
 
 def merge(saved: list[dict], fresh: list[dict], now: datetime) -> list[dict]:
-    """By id (fresh copy wins), drop older than 72 h, newest first, fold the same story from two outlets into the newest."""
-    by_id = {s["id"]: s for s in saved} | {s["id"]: s for s in fresh}
-    cutoff = (now - timedelta(hours=KEEP_HOURS)).strftime(_ISO)
+    """The saved state: by id (fresh copy wins), times capped at now, older than 72 h dropped, newest first. Not folded,
+    so a story whose twin leaves its feed keeps its own places and picture."""
+    stamp, cutoff = now.astimezone(timezone.utc).strftime(_ISO), (now - timedelta(hours=KEEP_HOURS)).astimezone(timezone.utc).strftime(_ISO)
+    by_id = {s["id"]: {**s, "published": min(s["published"], stamp)} for s in [*saved, *fresh]}
+    return sorted((s for s in by_id.values() if s["published"] >= cutoff), key=lambda s: s["published"], reverse=True)
+
+
+def fold(stories: list[dict]) -> list[dict]:
+    """The same story from two outlets (same language, headline-word overlap >= 0.5) becomes its newest copy,
+    with both copies' places, the first picture and farm if either is."""
     out: list[dict] = []
     kept_words: list[set[str]] = []
-    for s in sorted((s for s in by_id.values() if s["published"] >= cutoff), key=lambda s: s["published"], reverse=True):
+    for s in sorted(stories, key=lambda s: s["published"], reverse=True):
         w = _words(s["title"])
         twin = next((i for i, k in enumerate(out) if k["lang"] == s["lang"] and w and kept_words[i]
                      and len(w & kept_words[i]) / len(w | kept_words[i]) >= 0.5), None)
@@ -178,16 +191,15 @@ def merge(saved: list[dict], fresh: list[dict], now: datetime) -> list[dict]:
             kept_words.append(w)
             continue
         k = out[twin]
-        k["districts"] = sorted({*k["districts"], *s["districts"]})
-        k["states"] = sorted({*k["states"], *s["states"]})
-        k["image"] = k["image"] or s["image"]
+        k["districts"], k["states"] = sorted({*k["districts"], *s["districts"]}), sorted({*k["states"], *s["states"]})
+        k["image"], k["farm"] = k["image"] or s["image"], k["farm"] or s["farm"]
     return out
 
 
 def build_files(stories: list[dict], now: datetime) -> dict[str, dict]:
     """R2 key → payload. A national story naming a state is also written into that state's file."""
     files: dict[str, list[dict]] = defaultdict(list)
-    for s in sorted(stories, key=lambda s: s["published"], reverse=True):
+    for s in fold(stories):
         row = {k: s[k] for k in STORY_KEYS}
         if s["level"] == "world":
             files[f"news/world/{s['lang']}.json"].append(row)

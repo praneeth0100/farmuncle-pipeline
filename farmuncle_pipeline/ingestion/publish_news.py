@@ -43,8 +43,10 @@ def _encode(payload: dict) -> bytes:
 def _read(store, key: str, default):
     try:
         data = store.get(key)
-    except Exception:  # noqa: BLE001 — first run: nothing saved yet
-        return default
+    except Exception as exc:  # a missing file is the first run; anything else must not look like one (it would wipe the 72 h)
+        if isinstance(exc, KeyError) or getattr(exc, "response", {}).get("Error", {}).get("Code") in ("NoSuchKey", "404", "NotFound"):
+            return default
+        raise
     return json.loads(gzip.decompress(data) if data[:2] == b"\x1f\x8b" else data)
 
 

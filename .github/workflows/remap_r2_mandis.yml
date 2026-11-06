@@ -1,0 +1,46 @@
+name: remap_r2_mandis
+
+# One-off, 2026-11-06: point archived R2 days at surviving mandi ids after the district merge, and report
+# same-day overlaps. MODE "dry" only reads; "apply" rewrites. Runs on a push that changes this file.
+# Shares warehouse-writer with archive_history, so the archive never writes a day while it is being rewritten.
+on:
+  push:
+    branches: [fix/district-renames]
+    paths: [.github/workflows/remap_r2_mandis.yml]
+  workflow_dispatch:
+
+concurrency:
+  group: warehouse-writer
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  MODE: dry
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Remap R2 mandis
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DATA_GOV_API_KEY: ${{ secrets.DATA_GOV_API_KEY }}
+          MANDI_R2_ACCOUNT_ID: ${{ secrets.MANDI_R2_ACCOUNT_ID }}
+          MANDI_R2_ACCESS_KEY_ID: ${{ secrets.MANDI_R2_ACCESS_KEY_ID }}
+          MANDI_R2_SECRET_ACCESS_KEY: ${{ secrets.MANDI_R2_SECRET_ACCESS_KEY }}
+          MANDI_R2_BUCKET: ${{ secrets.MANDI_R2_BUCKET }}
+        run: python -m farmuncle_pipeline.ops.remap_r2_mandis out $([ "$MODE" = apply ] && echo --apply)
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: remap-${{ env.MODE }}
+          path: out/

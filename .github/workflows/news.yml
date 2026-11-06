@@ -1,0 +1,35 @@
+name: news
+
+# News tab files from publisher RSS feeds (see docs/news.md). Reads catalog/mandis.json and catalog/states.json from R2;
+# never touches the warehouse.
+on:
+  schedule:
+    - cron: "7,37 * * * *" # every 30 min, off the hour; GitHub may run late or skip, the app shows the file's age
+  workflow_dispatch: {}
+
+concurrency:
+  group: news
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: News
+        env:
+          MANDI_R2_ACCOUNT_ID: ${{ secrets.MANDI_R2_ACCOUNT_ID }}
+          MANDI_R2_ACCESS_KEY_ID: ${{ secrets.MANDI_R2_ACCESS_KEY_ID }}
+          MANDI_R2_SECRET_ACCESS_KEY: ${{ secrets.MANDI_R2_SECRET_ACCESS_KEY }}
+          MANDI_R2_BUCKET: ${{ secrets.MANDI_R2_BUCKET }}
+          NEWS_CONTACT: ${{ secrets.NEWS_CONTACT }} # a contact URL or email for the User-Agent; falls back to the repo URL
+        run: python -m farmuncle_pipeline.ingestion.publish_news

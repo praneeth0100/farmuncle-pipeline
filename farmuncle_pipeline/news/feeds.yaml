@@ -1,0 +1,45 @@
+# Publisher feeds for the News tab (see docs/news.md). To drop a feed, delete its entry.
+# states/districts are codes from catalog/mandis.json. farm_only: an agriculture section, every item kept;
+# other feeds keep only items with a farm word. upgrade_images: the feed lists http:// pictures its host also serves over https.
+# Checked 6 Nov 2026. Tried and left out: Amar Ujala state feeds (no pictures), Patrika (server error 522),
+# Dainik Jagran (404), Down To Earth, Gaon Connection, Udayavani, Vikatan, Manorama, Agrowon (no working feed found),
+# PIB (no pictures).
+feeds:
+  # National farm sections (English)
+  - {id: hindu_agri, outlet: The Hindu, url: "https://www.thehindu.com/sci-tech/agriculture/feeder/default.rss", language: en, level: national, farm_only: true}
+  - {id: businessline_agri, outlet: BusinessLine, url: "https://www.thehindubusinessline.com/economy/agri-business/feeder/default.rss", language: en, level: national, farm_only: true}
+  - {id: krishi_jagran, outlet: Krishi Jagran, url: "https://krishijagran.com/feeds/rss/", language: en, level: national, farm_only: true}
+  - {id: rural_voice, outlet: Rural Voice, url: "https://eng.ruralvoice.in/rss/latest-posts", language: en, level: national, farm_only: true, upgrade_images: true}
+  # National general news (farm items only)
+  - {id: indian_express_india, outlet: The Indian Express, url: "https://indianexpress.com/section/india/feed/", language: en, level: national}
+  - {id: ndtv_india, outlet: NDTV, url: "https://feeds.feedburner.com/ndtvnews-india-news", language: en, level: national}
+  - {id: bhaskar_desh, outlet: Dainik Bhaskar, url: "https://www.bhaskar.com/rss-v1--category-1061.xml", language: hi, level: national}
+  # States (English)
+  - {id: hindu_karnataka, outlet: The Hindu, url: "https://www.thehindu.com/news/national/karnataka/feeder/default.rss", language: en, level: state, states: [ka]}
+  - {id: hindu_tamil_nadu, outlet: The Hindu, url: "https://www.thehindu.com/news/national/tamil-nadu/feeder/default.rss", language: en, level: state, states: [tn]}
+  - {id: hindu_andhra, outlet: The Hindu, url: "https://www.thehindu.com/news/national/andhra-pradesh/feeder/default.rss", language: en, level: state, states: [ap]}
+  - {id: hindu_telangana, outlet: The Hindu, url: "https://www.thehindu.com/news/national/telangana/feeder/default.rss", language: en, level: state, states: [tg]}
+  - {id: hindu_kerala, outlet: The Hindu, url: "https://www.thehindu.com/news/national/kerala/feeder/default.rss", language: en, level: state, states: [kl]}
+  - {id: hindu_bengaluru, outlet: The Hindu, url: "https://www.thehindu.com/news/cities/bangalore/feeder/default.rss", language: en, level: city, states: [ka], districts: [ka.bangalore, ka.bengaluru]}
+  - {id: toi_bengaluru, outlet: Times of India, url: "https://timesofindia.indiatimes.com/rssfeeds/-2128833038.cms", language: en, level: city, states: [ka], districts: [ka.bangalore, ka.bengaluru]}
+  # States (own languages)
+  - {id: prajavani, outlet: Prajavani, url: "https://www.prajavani.net/stories.rss", language: kn, level: state, states: [ka]}
+  - {id: tv9_kannada, outlet: TV9 Kannada, url: "https://tv9kannada.com/feed", language: kn, level: state, states: [ka]}
+  - {id: tv9_telugu, outlet: TV9 Telugu, url: "https://tv9telugu.com/feed", language: te, level: state, states: [ap, tg]}
+  - {id: ntnews, outlet: Namasthe Telangana, url: "https://www.ntnews.com/feed", language: te, level: state, states: [tg]}
+  - {id: sakshi, outlet: Sakshi, url: "https://www.sakshi.com/rss.xml", language: te, level: state, states: [ap, tg]}
+  - {id: mathrubhumi, outlet: Mathrubhumi, url: "https://www.mathrubhumi.com/rss", language: ml, level: state, states: [kl]}
+  - {id: oneindia_tamil, outlet: OneIndia Tamil, url: "https://tamil.oneindia.com/rss/tamil-news-fb.xml", language: ta, level: state, states: [tn]}
+  # Hindi states (Dainik Bhaskar state sections; Live Hindustan where Bhaskar is thin on farm news)
+  - {id: bhaskar_up, outlet: Dainik Bhaskar, url: "https://www.bhaskar.com/rss-v1--category-2052.xml", language: hi, level: state, states: [up]}
+  - {id: bhaskar_mp, outlet: Dainik Bhaskar, url: "https://www.bhaskar.com/rss-v1--category-1739.xml", language: hi, level: state, states: [mp]}
+  - {id: bhaskar_rajasthan, outlet: Dainik Bhaskar, url: "https://www.bhaskar.com/rss-v1--category-1740.xml", language: hi, level: state, states: [rj]}
+  - {id: bhaskar_chhattisgarh, outlet: Dainik Bhaskar, url: "https://www.bhaskar.com/rss-v1--category-1741.xml", language: hi, level: state, states: [cg]}
+  - {id: bhaskar_haryana, outlet: Dainik Bhaskar, url: "https://www.bhaskar.com/rss-v1--category-1742.xml", language: hi, level: state, states: [hr]}
+  - {id: bhaskar_punjab, outlet: Dainik Bhaskar, url: "https://www.bhaskar.com/rss-v1--category-1743.xml", language: hi, level: state, states: [pb]}
+  - {id: bhaskar_maharashtra, outlet: Dainik Bhaskar, url: "https://www.bhaskar.com/rss-v1--category-2318.xml", language: hi, level: state, states: [mh]}
+  - {id: bhaskar_bihar, outlet: Dainik Bhaskar, url: "https://www.bhaskar.com/rss-v1--category-3679.xml", language: hi, level: state, states: [br]}
+  - {id: hindustan_up, outlet: Live Hindustan, url: "https://api.livehindustan.com/feeds/rss/uttar-pradesh/rssfeed.xml", language: hi, level: state, states: [up]}
+  - {id: hindustan_bihar, outlet: Live Hindustan, url: "https://api.livehindustan.com/feeds/rss/bihar/rssfeed.xml", language: hi, level: state, states: [br]}
+  # World
+  - {id: guardian_farming, outlet: The Guardian, url: "https://www.theguardian.com/environment/farming/rss", language: en, level: world, farm_only: true}

@@ -24,7 +24,6 @@ from pathlib import Path
 
 from farmuncle_pipeline.archive.export import manifest_key
 from farmuncle_pipeline.archive.store import R2Store
-from farmuncle_pipeline.ingest_common import validate_startup
 
 
 def survivors(mandis: list[dict]) -> dict[int, int]:
@@ -96,7 +95,11 @@ def main() -> None:
 
     out_dir, apply = Path(sys.argv[1]), "--apply" in sys.argv
     out_dir.mkdir(parents=True, exist_ok=True)
-    db = validate_startup().supabase
+    import os
+
+    from supabase import create_client
+
+    db = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_KEY"])  # needs only the warehouse and R2
     mandis, start = [], 0
     while True:
         page = db.table("mandis").select("id,name,normalized_name,state,district,status,merged_into_id").order("id").range(start, start + 999).execute().data or []

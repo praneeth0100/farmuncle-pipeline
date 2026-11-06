@@ -1,6 +1,6 @@
 name: remap_r2_mandis
 
-# One-off, 2026-11-06: point archived R2 days at surviving mandi ids after the district merge, and report
+# One-off, 2026-11-06 (rerun 1): point archived R2 days at surviving mandi ids after the district merge, and report
 # same-day overlaps. MODE "dry" only reads; "apply" rewrites. Runs on a push that changes this file.
 # Shares warehouse-writer with archive_history, so the archive never writes a day while it is being rewritten.
 on:

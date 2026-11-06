@@ -110,6 +110,9 @@ def main() -> None:
     merged = survivors(mandis)
     pairs = candidate_pairs(mandis, merged)
     watch = {i for p in pairs for i in p}
+    pairs_of: dict[int, list[tuple[int, int]]] = defaultdict(list)
+    for pair in pairs:
+        pairs_of[pair[0]].append(pair)
     store = R2Store.from_env()
     keys = sorted(k for k in store.list("facts/daily/") if k.endswith(".parquet"))
     print(f"[remap] {len(mandis)} mandis, {len(merged)} merged, {len(pairs)} candidate pairs, {len(keys)} archived days, apply={apply}")
@@ -121,6 +124,19 @@ def main() -> None:
         present = defaultdict(int)
         for i in ids:
             present[i] += 1
+        # Same day, same crop/variety/grade at both mandis of a pair: is it one market listed twice (same price)?
+        prices: dict[int, dict] = defaultdict(dict)
+        cols = [table.column(c).to_pylist() for c in ("crop_id", "variety_id", "grade_id", "modal_price")]
+        for i, crop, variety, grade, modal in zip(ids, *cols):
+            if i in watch:
+                prices[i][(crop, variety, grade)] = modal
+        agree = {}
+        for a in prices:
+            for pair in pairs_of.get(a, ()):
+                other = prices.get(pair[1])
+                if other:
+                    shared = prices[a].keys() & other.keys()
+                    agree[pair] = (len(shared), sum(1 for k in shared if prices[a][k] == other[k]))
         new, changed = remap_table(table, merged)
         status = "unchanged"
         if changed and apply:
@@ -146,15 +162,19 @@ def main() -> None:
                 status = "rewritten"
         elif changed:
             status = "would_rewrite"
-        return day, table.num_rows, changed, status, dict(present)
+        return day, table.num_rows, changed, status, dict(present), agree
 
     presence = defaultdict(lambda: [None, None, 0, 0])  # first, last, days, rows (by archived id)
     traded: dict[int, set[str]] = defaultdict(set)
+    compared: dict[tuple[int, int], list[int]] = defaultdict(lambda: [0, 0])  # shared combos, same modal price
     with open(out_dir / "days.csv", "w", newline="", encoding="utf-8") as f, ThreadPoolExecutor(16) as pool:
         w = csv.writer(f)
         w.writerow(["day", "rows", "rows_remapped", "status"])
-        for day, rows, changed, status, present in pool.map(one, keys):
+        for day, rows, changed, status, present, agree in pool.map(one, keys):
             w.writerow([day, rows, changed, status])
+            for pair, (shared, same) in agree.items():
+                compared[pair][0] += shared
+                compared[pair][1] += same
             for i, n in present.items():
                 p = presence[i]
                 p[0] = day if p[0] is None or day < p[0] else p[0]
@@ -166,11 +186,11 @@ def main() -> None:
     by_id = {m["id"]: m for m in mandis}
     with open(out_dir / "pair_overlap.csv", "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["kind", "state", "id_a", "name_a", "district_a", "id_b", "name_b", "district_b", "days_a", "days_b", "days_both", "first_a", "last_a", "first_b", "last_b"])
+        w.writerow(["kind", "state", "id_a", "name_a", "district_a", "id_b", "name_b", "district_b", "days_a", "days_b", "days_both", "shared_prices", "same_price", "first_a", "last_a", "first_b", "last_b"])
         for (a, b), kind in sorted(pairs.items(), key=lambda x: (x[1], by_id[x[0][0]]["state"])):
             ma, mb = by_id[a], by_id[b]
             w.writerow([kind, ma["state"], a, ma["name"], ma["district"], b, mb["name"], mb["district"],
-                        len(traded[a]), len(traded[b]), len(traded[a] & traded[b]),
+                        len(traded[a]), len(traded[b]), len(traded[a] & traded[b]), compared[(a, b)][0], compared[(a, b)][1],
                         presence[a][0], presence[a][1], presence[b][0], presence[b][1]])
     with open(out_dir / "mandi_presence.csv", "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)

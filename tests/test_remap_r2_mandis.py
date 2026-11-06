@@ -21,3 +21,23 @@ def test_remap_handles_an_all_null_source_column():
     t = pa.table({"mandi_id": [1], "source_mandi_id": pa.array([None], type=pa.null())})
     new, _ = remap_table(t, {1: 3})
     assert new.column("source_mandi_id").to_pylist() == [1]
+
+
+def test_drop_merge_copies_removes_only_remapped_rows_that_repeat_a_record():
+    from farmuncle_pipeline.ops.remap_r2_mandis import drop_merge_copies
+
+    t = pa.table({"mandi_id": [3, 3, 3, 3], "crop_id": [1, 1, 2, 1], "variety_id": [1, 1, 1, 1], "grade_id": [1, 1, 1, 1],
+                  "price_date": ["d"] * 4, "modal_price": [10, 10, 20, 11], "min_price": [9] * 4, "max_price": [12] * 4})
+    remapped = [False, True, True, True]  # row 0 was already mandi 3; rows 1-3 came from a merged mandi
+    out, dropped = drop_merge_copies(t, remapped)
+    assert dropped == 1  # row 1 repeats row 0 exactly
+    assert out.column("modal_price").to_pylist() == [10, 20, 11]  # a different price is kept as its own row
+
+
+def test_drop_merge_copies_keeps_repeats_that_were_already_in_the_file():
+    from farmuncle_pipeline.ops.remap_r2_mandis import drop_merge_copies
+
+    t = pa.table({"mandi_id": [3, 3], "crop_id": [1, 1], "variety_id": [1, 1], "grade_id": [1, 1],
+                  "price_date": ["d", "d"], "modal_price": [10, 10], "min_price": [9, 9], "max_price": [12, 12]})
+    out, dropped = drop_merge_copies(t, [False, False])
+    assert dropped == 0 and out.num_rows == 2

@@ -2,8 +2,9 @@
 
 Usage: python -m farmuncle_pipeline.ops.remap_r2_mandis OUT_DIR [--apply]
 Without --apply it only reads. With it, a day whose file names a merged mandi is rewritten with the surviving id
-(source_mandi_id keeps the id the row was archived under, as union_merge_mandi does in the warehouse). A rewrite
-keeps every row: it is refused unless the new file has exactly the rows of the old one and of its manifest.
+(source_mandi_id keeps the id the row was archived under, as union_merge_mandi does in the warehouse). A remapped row
+that exactly repeats a record of that day is dropped (the same copy the warehouse merge deletes); a rewrite is refused
+unless the new file has the old file's rows minus exactly those copies, and the old file matches its manifest.
 
 Writes to OUT_DIR: days.csv (per day: rows, rows remapped), pair_overlap.csv (per candidate pair: days each traded,
 days both traded), mandi_presence.csv (per mandi id as archived: first/last day, days, rows).
@@ -90,6 +91,33 @@ def remap_table(table, merged: dict[int, int]):
     return table, changed
 
 
+_RECORD = ("mandi_id", "crop_id", "variety_id", "grade_id", "price_date", "modal_price", "min_price", "max_price")
+
+
+def drop_merge_copies(table, remapped: list[bool]):
+    """Drop a remapped row that repeats a record already in the day (same mandi, crop, variety, grade, prices).
+
+    Those are the feed listing one market twice under two labels; union_merge_mandi deletes the same copies in the
+    warehouse. Rows that were not remapped are never dropped, so a repeat the file already held stays as it was.
+    """
+    cols = [table.column(c).to_pylist() for c in _RECORD]
+    records = list(zip(*cols))
+    seen = {rec for rec, moved in zip(records, remapped) if not moved}
+    keep = []
+    for rec, moved in zip(records, remapped):
+        if moved and rec in seen:
+            keep.append(False)
+        else:
+            keep.append(True)
+            seen.add(rec)
+    dropped = keep.count(False)
+    if not dropped:
+        return table, 0
+    import pyarrow as pa
+
+    return table.filter(pa.array(keep)), dropped
+
+
 def main() -> None:
     import pyarrow.parquet as pq
 
@@ -138,6 +166,9 @@ def main() -> None:
                     shared = prices[a].keys() & other.keys()
                     agree[pair] = (len(shared), sum(1 for k in shared if prices[a][k] == other[k]))
         new, changed = remap_table(table, merged)
+        dropped = 0
+        if changed:
+            new, dropped = drop_merge_copies(new, [merged.get(i, i) != i for i in ids])
         status = "unchanged"
         if changed and apply:
             from datetime import date
@@ -150,28 +181,29 @@ def main() -> None:
                 manifest = json.loads(store.get(manifest_key(date.fromisoformat(day))))
             except Exception:
                 manifest = None
-            if check.num_rows != table.num_rows or (manifest and int(manifest["rows"]) != table.num_rows):
+            # Fewer rows only by the exact copies just dropped, and only from a file that matches its manifest.
+            if check.num_rows != table.num_rows - dropped or (manifest and int(manifest["rows"]) != table.num_rows):
                 status = f"REFUSED rows file={table.num_rows} new={check.num_rows} manifest={manifest and manifest['rows']}"
             else:
                 store.put(key, data)
                 if store.size(key) != len(data):
                     raise RuntimeError(f"{key}: stored size does not match")
                 if manifest:
-                    manifest.update(bytes=len(data), sha256=hashlib.sha256(data).hexdigest(), mandis_remapped="2026-11-06")
+                    manifest.update(rows=check.num_rows, merge_copies_dropped=dropped, bytes=len(data), sha256=hashlib.sha256(data).hexdigest(), mandis_remapped="2026-11-06")
                     store.put(manifest_key(date.fromisoformat(day)), json.dumps(manifest, indent=1).encode(), "application/json")
                 status = "rewritten"
         elif changed:
             status = "would_rewrite"
-        return day, table.num_rows, changed, status, dict(present), agree
+        return day, table.num_rows, changed, dropped, status, dict(present), agree
 
     presence = defaultdict(lambda: [None, None, 0, 0])  # first, last, days, rows (by archived id)
     traded: dict[int, set[str]] = defaultdict(set)
     compared: dict[tuple[int, int], list[int]] = defaultdict(lambda: [0, 0])  # shared combos, same modal price
     with open(out_dir / "days.csv", "w", newline="", encoding="utf-8") as f, ThreadPoolExecutor(16) as pool:
         w = csv.writer(f)
-        w.writerow(["day", "rows", "rows_remapped", "status"])
-        for day, rows, changed, status, present, agree in pool.map(one, keys):
-            w.writerow([day, rows, changed, status])
+        w.writerow(["day", "rows", "rows_remapped", "merge_copies_dropped", "status"])
+        for day, rows, changed, dropped, status, present, agree in pool.map(one, keys):
+            w.writerow([day, rows, changed, dropped, status])
             for pair, (shared, same) in agree.items():
                 compared[pair][0] += shared
                 compared[pair][1] += same

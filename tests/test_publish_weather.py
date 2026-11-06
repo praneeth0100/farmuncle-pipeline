@@ -75,3 +75,16 @@ def test_run_fails_only_above_twenty_percent_errors():
         pw.run_history(Store({"catalog/mandis.json": MANDIS}), one_of_two, NOW)
     many = {"v": 1, "mandis": [{"id": f"x.{i}", "lat": 10 + i, "lng": 76.0, "status": "ACTIVE"} for i in range(10)]}
     pw.run_history(Store({"catalog/mandis.json": many}), fetcher(POWER, fail=("latitude=10.25",)), NOW)  # 1 of 10: fine
+
+
+def test_forecast_requests_stay_under_twenty_a_second():
+    many = {"v": 1, "mandis": [{"id": f"x.{i}", "lat": 10 + i, "lng": 76.0, "status": "ACTIVE"} for i in range(8)]}
+    times = []
+    base = fetcher(METNO)
+
+    def timed(url, headers=None):
+        times.append(__import__("time").monotonic())
+        return base(url, headers)
+    pw.run_forecast(Store({"catalog/mandis.json": many}), timed, NOW)
+    times.sort()
+    assert len(times) == 8 and min(b - a for a, b in zip(times, times[1:])) >= 0.05 - 1e-3

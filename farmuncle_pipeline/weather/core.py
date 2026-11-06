@@ -51,8 +51,9 @@ def parse_metno(payload: dict, tz_offset_hours: float = 5.5) -> list[dict]:
     for step in payload["properties"]["timeseries"]:
         day = datetime.fromisoformat(step["time"].replace("Z", "+00:00")).astimezone(tz).date().isoformat()
         data = step["data"]
-        temp = data["instant"]["details"].get("air_temperature")
-        if temp is not None:
+        # The day's peak: instant readings, plus the 6-hour maximum (from day 3 the steps are 6-hourly and miss the afternoon).
+        temps = [data["instant"]["details"].get("air_temperature"), (data.get("next_6_hours") or {}).get("details", {}).get("air_temperature_max")]
+        for temp in (t for t in temps if t is not None):
             tmax[day] = max(tmax.get(day, temp), temp)
         hourly = data.get("next_1_hours")
         if hourly:

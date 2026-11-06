@@ -41,3 +41,14 @@ def test_parse_metno_makes_ist_days():
     days = core.parse_metno(payload)
     assert days[0] == {"date": "2026-11-06", "rain_mm": 3.5, "tmax_c": 32.5}
     assert days[1] == {"date": "2026-11-07", "rain_mm": 4.0, "tmax_c": 22.0}
+
+
+def test_parse_metno_reads_the_daily_peak_from_six_hour_steps():
+    # From day 3 the forecast is 6-hourly: the instant readings miss the afternoon peak, the 6-hour max does not.
+    payload = {"properties": {"timeseries": [
+        {"time": "2026-11-09T00:00:00Z", "data": {"instant": {"details": {"air_temperature": 30.0}},
+                                                  "next_6_hours": {"details": {"air_temperature_max": 42.0, "precipitation_amount": 1.0}}}},
+        {"time": "2026-11-09T06:00:00Z", "data": {"instant": {"details": {"air_temperature": 39.0}},
+                                                  "next_6_hours": {"details": {"air_temperature_max": 41.0, "precipitation_amount": 0.0}}}},
+    ]}}
+    assert core.parse_metno(payload)[0] == {"date": "2026-11-09", "rain_mm": 1.0, "tmax_c": 42.0}

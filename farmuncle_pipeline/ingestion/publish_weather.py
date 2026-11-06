@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
@@ -26,6 +27,22 @@ POWER_URL = ("https://power.larc.nasa.gov/api/temporal/daily/point?parameters=PR
              "&latitude={lat}&longitude={lng}&start={start}&end={end}&format=JSON&time-standard=UTC")
 METNO_URL = "https://api.met.no/weatherapi/locationforecast/2.0/compact?lat={lat:.4f}&lon={lng:.4f}"
 MAX_FAILED = 0.2
+METNO_GAP_S = 0.06  # MET Norway allows under 20 requests a second; ~16/s across all workers
+
+
+class Pace:
+    """Spaces calls from many threads at least `gap` seconds apart."""
+
+    def __init__(self, gap: float) -> None:
+        self.gap, self.lock, self.next = gap, threading.Lock(), 0.0
+
+    def wait(self) -> None:
+        with self.lock:
+            now = time.monotonic()
+            at = max(now, self.next)
+            self.next = at + self.gap
+        if at > now:
+            time.sleep(at - now)
 
 
 def cells_for(mandis: list[dict]) -> dict[str, str]:
@@ -85,6 +102,7 @@ def run_history(store, fetch, now: datetime, limit: int | None = None) -> dict:
 def run_forecast(store, fetch, now: datetime, limit: int | None = None, contact: str = "") -> dict:
     cells = sorted(set(_catalogue(store).values()))[:limit]
     headers = {"User-Agent": f"AgroUncle/1.0 {contact}".strip(), "Accept-Encoding": "gzip"}
+    pace = Pace(METNO_GAP_S)
 
     def work(cell):
         key = f"weather/forecast/{cell}.json"
@@ -96,6 +114,7 @@ def run_forecast(store, fetch, now: datetime, limit: int | None = None, contact:
             return False  # MET Norway: never ask again before Expires
         lat, lng = cell_centre(cell)
         ask = {**headers, **({"If-Modified-Since": old["last_modified"]} if old and old.get("last_modified") else {})}
+        pace.wait()
         status, reply_headers, payload = fetch(METNO_URL.format(lat=lat, lng=lng), ask)
         expires = parsedate_to_datetime(reply_headers["Expires"]).isoformat() if reply_headers.get("Expires") else None
         if status == 304 and old:

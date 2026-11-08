@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+     xmlns:dc="http://purl.org/dc/elements/1.1/"
+     xmlns:sy="http://purl.org/rss/1.0/modules/syndication/"
+     xmlns:admin="http://webns.net/mvcb/"
+     xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+     xmlns:content="http://purl.org/rss/1.0/modules/content/">
+<channel>
+    <title>Rural Voice is a bilingual news platform which is filling the information gap by providing in&#45;depth coverage of agricultural policies, technological advancements, cooperatives, public sector and rural development. It offers analytical content tailored for &#45; Latest Posts</title>
+    <link>https://eng.ruralvoice.in/rss/latest-posts</link>
+    <description>Rural Voice is a bilingual news platform which is filling the information gap by providing in&amp;#45;depth coverage of agricultural policies, technological advancements, cooperatives, public sector and rural development. It offers analytical content tailored for &amp;#45; Latest Posts</description>
+    <dc:language>en</dc:language>
+    <dc:creator></dc:creator>
+    <dc:rights>Copyright © 2024&amp;#45;25 ruralvoice.in</dc:rights>
+
+    <item>
+        <title>Karnataka Finds Up to 31.2% Ethanol in Petrol, Puts Annual Consumer Burden at Rs 1.01 Lakh Crore</title>
+        <link>https://eng.ruralvoice.in/national/karnataka-finds-up-to-31.2-percent-ethanol-in-petrol-puts-annual-consumer-burden-at-rs-1.01-lakh-crore.html</link>
+        <guid>https://eng.ruralvoice.in/national/karnataka-finds-up-to-31.2-percent-ethanol-in-petrol-puts-annual-consumer-burden-at-rs-1.01-lakh-crore.html</guid>
+        <description><![CDATA[ Karnataka&#039;s fuel quality tests have found ethanol content exceeding the mandated E20 limit in 11 of 14 petrol samples, with the highest concentration at 31.2%. The State government has raised concerns over vehicle compatibility, reduced mileage and repair costs, demanding greater transparency, consumer compensation and stricter monitoring. ]]></description>
+        <enclosure url="http://eng.ruralvoice.in/uploads/images/2025/08/image_750x500_68934906c2e4b.jpg" length="84205" type="image/jpeg"/>
+        <pubDate>Fri, 06 Nov 2026 16:25:35 +0530</pubDate>
+        <dc:creator>Rajasree Singh</dc:creator>
+    </item>
+
+    <item>
+        <title>FAO Food Price Index Falls 1.2% in October as Cereal, Dairy and Meat Prices Decline</title>
+        <link>https://eng.ruralvoice.in/international/fao-food-price-index-falls-1.2-percent-in-october-as-cereal-dairy-and-meat-prices-decline.html</link>
+        <guid>https://eng.ruralvoice.in/international/fao-food-price-index-falls-1.2-percent-in-october-as-cereal-dairy-and-meat-prices-decline.html</guid>
+        <description><![CDATA[ The FAO Food Price Index declined 1.2% month-on-month to 133.9 points in October 2026, driven by lower cereal, dairy and meat prices. Sugar prices rose 6.6% to their highest level since December 2024, while vegetable oil prices edged up marginally amid firm global demand. ]]></description>
+        <enclosure url="http://eng.ruralvoice.in/uploads/images/2024/08/image_750x500_66add2239e745.jpg" length="89157" type="image/jpeg"/>
+        <pubDate>Fri, 06 Nov 2026 15:47:21 +0530</pubDate>
+        <dc:creator>Rajasree Singh</dc:creator>
+    </item>
+
+    <item>
+        <title>Godrej Agrovet Q2 Revenue Rises 17%, Net Profit Jumps 22% to Rs 103 Crore</title>
+        <link>https://eng.ruralvoice.in/agribusiness/godrej-agrovet-q2-revenue-rises-17-percent-net-profit-jumps-22-percent-to-rs-103-crore.html</link>
+        <guid>https://eng.ruralvoice.in/agribusiness/godrej-agrovet-q2-revenue-rises-17-percent-net-profit-jumps-22-percent-to-rs-103-crore.html</guid>
+        <description><![CDATA[ Godrej Agrovet reported a 17% year-on-year increase in consolidated revenue to Rs 2,995 crore in Q2 FY27. Net profit rose 22% to Rs 103 crore, while EBITDA remained flat at Rs 222 crore amid input cost pressures and weather-related challenges. ]]></description>
+        <enclosure url="http://eng.ruralvoice.in/uploads/images/2026/11/image_750x500_6aed94c59389c.jpg" length="62828" type="image/jpeg"/>
+        <pubDate>Fri, 06 Nov 2026 14:22:25 +0530</pubDate>
+        <dc:creator>Rajasree Singh</dc:creator>
+    </item></channel></rss>

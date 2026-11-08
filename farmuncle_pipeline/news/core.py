@@ -55,7 +55,7 @@ BLOCK_TERMS: dict[str, list[str]] = {
 # The published catalog spells some states unlike the press does.
 STATE_ALIASES = {"kl": ["kerala"], "cg": ["chhattisgarh"], "dl": ["delhi"], "od": ["orissa"], "uk": ["uttaranchal"]}
 # District-name words that are also everyday words or people's names, so alone they name no district.
-NOT_PLACES = {"nagar", "bhavani", "govardhan", "premium", "matar", "raman", "mahesh", "kishan", "janata", "islam", "erode", "anand", "sagar", "krishna", "lower", "middle", "upper", "paschim", "purba", "uttara", "dakshina", "reddy", "gautam", "kabir", "ranga",
+NOT_PLACES = {"a lot", "shakti", "mandal", "lanka", "tarana", "nagar", "bhavani", "govardhan", "premium", "matar", "raman", "mahesh", "kishan", "janata", "islam", "erode", "anand", "sagar", "krishna", "lower", "middle", "upper", "paschim", "purba", "uttara", "dakshina", "reddy", "gautam", "kabir", "ranga",
               "siddharth", "chhota", "dehat", "thana", "champa", "yamuna", "dwarka", "malwa", "sathya", "sitharama", "alluri",
               "somnath", "manpur", "khiri", "devbhumi", "sounth", "chattrapati", "jayashankar", "rajanna", "baroda"}
 STORY_KEYS = ("id", "title", "link", "outlet", "published", "lang", "image", "level", "districts", "states", "farm")
@@ -126,7 +126,7 @@ def is_farm(story: dict, farm_only: bool) -> bool:
 class PlaceIndex(TypedDict):
     pattern: re.Pattern | None
     codes: dict[str, tuple[str, str | None]]  # lower-case name → (state code, district code or None)
-    native: list[tuple[str, str, str | None]]  # regional-script name, state code, district code or None
+    native: list[tuple[re.Pattern, list[tuple[str, str | None]]]]  # longest name first: its pattern, its (state, district or None) places
 
 
 def _plain(text: str) -> str:
@@ -167,9 +167,13 @@ def place_index(mandis: list[dict], states: list[dict], native: dict[str, list[s
     for s in states:
         for name in [s["name"].lower(), *STATE_ALIASES.get(s["id"], [])]:
             codes[name] = (s["id"], None)  # a state name wins over a district word of the same spelling
+    regional: dict[str, list[tuple[str, str | None]]] = defaultdict(list)
+    for code, native_names in (native or {}).items():
+        for name in native_names:
+            regional[_plain(name)].append((code.split(".")[0], code if "." in code else None))
     names = sorted(codes, key=len, reverse=True)
     return {"pattern": re.compile(r"\b(" + "|".join(map(re.escape, names)) + r")\b") if names else None, "codes": codes,
-            "native": [(_plain(name), code.split(".")[0], code if "." in code else None) for code, names in (native or {}).items() for name in names]}
+            "native": [(re.compile(name), places) for name, places in sorted(regional.items(), key=lambda item: len(item[0]), reverse=True)]}
 
 
 def tag_places(story: dict, index: PlaceIndex) -> dict:
@@ -182,11 +186,13 @@ def tag_places(story: dict, index: PlaceIndex) -> dict:
             if district:
                 found_d.add(district)
     plain = _plain(text)
-    for name, state, district in index["native"]:
-        if name in plain:
-            found_s.add(state)
-            if district:
-                found_d.add(district)
+    for pattern, places in index["native"]:
+        plain, hits = pattern.subn(" ", plain)  # blanked, so నాగర్ కర్నూలు does not also read as కర్నూలు
+        if hits:
+            for state, district in places:
+                found_s.add(state)
+                if district:
+                    found_d.add(district)
     return {**story, "districts": sorted(found_d), "states": sorted(found_s)}
 
 

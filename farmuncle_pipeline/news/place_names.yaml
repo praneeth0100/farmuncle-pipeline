@@ -1,11 +1,12 @@
 # Place names in regional scripts, so a story in that language gets its district and state codes (see docs/news.md).
-# Code → names. Matched anywhere in the text because words inflect at the end (కర్నూలులో), so use stems, and avoid names
-# that are also everyday words or people (కృష్ణ, ప్రకాశం and అన్నమయ్య only with జిల్లా, "district").
+# Code → names, each a regex stem matched anywhere in the text because words inflect at the end (కర్నూలులో). Avoid names
+# that are also everyday words or people (కృష్ణ, ప్రకాశం and అన్నమయ్య only with జిల్లా, "district"), and exclude lookalikes:
+# డీఏపీ (DAP fertiliser) and ఏపీఎంసీ (APMC) are not ఏపీ, జగన్నాథ is not జగన్, కడపటి ("last") is not కడప.
 # The catalog spells some districts twice (ap.anantapur, ap.ananthapuramu): both codes carry the same names, so readers on
 # either get the story.
 # A state's list also holds its leaders and regions, which point to one state as surely as a name does.
 # shortcut: leaders change with governments; update these after a state election.
-ap: [ఆంధ్రప్రదేశ్, ఆంధ్ర ప్రదేశ్, ఏపీ, అమరావతి, రాయలసీమ, కోస్తాంధ్ర, చంద్రబాబు, పవన్ కళ్యాణ్, నారా లోకేశ్, జగన్]
+ap: [ఆంధ్రప్రదేశ్, ఆంధ్ర ప్రదేశ్, "(?<!డీ)ఏపీ(?!ఎం)", అమరావతి, రాయలసీమ, కోస్తాంధ్ర, చంద్రబాబు, పవన్ కళ్యాణ్, నారా లోకేశ్, "జగన్(?!నా)"]
 tg: [తెలంగాణ, రేవంత్, కేసీఆర్, కేటీఆర్, హరీశ్ రావు, బీఆర్ఎస్, సింగరేణి]
 ap.alluri_sitharama_raju: [అల్లూరి జిల్లా, అల్లూరి సీతారామరాజు జిల్లా, పాడేరు]
 ap.anakapally: [అనకాపల్లి]
@@ -14,8 +15,8 @@ ap.ananthapuramu: [అనంతపుర]
 ap.annamayya: [అన్నమయ్య జిల్లా, రాయచోటి]
 ap.bapatla: [బాపట్ల]
 ap.chittor: [చిత్తూరు]
-ap.cuddapah: [కడప]
-ap.ysr_kadapa: [కడప]
+ap.cuddapah: ["కడప(?!టి)"]
+ap.ysr_kadapa: ["కడప(?!టి)"]
 ap.dr_b_r_a_konaseema: [కోనసీమ, అమలాపురం]
 ap.east_godavari: [తూర్పు గోదావరి, రాజమండ్రి, రాజమహేంద్రవరం]
 ap.eluru: [ఏలూరు]
@@ -34,7 +35,7 @@ ap.polavaram: [పోలవరం]
 ap.prakasam: [ప్రకాశం జిల్లా, ఒంగోలు]
 ap.sri_sathya_sai: [సత్యసాయి జిల్లా, పుట్టపర్తి]
 ap.srikakulam: [శ్రీకాకుళం]
-ap.tirupathi: [తిరుపతి]
+ap.tirupathi: ["తిరుపతి(?! రెడ్డి)"]
 ap.vijayanagaram: [విజయనగరం]
 ap.visakhapatnam: [విశాఖపట్నం, విశాఖపట్టణం, విశాఖ]
 ap.west_godavari: [పశ్చిమ గోదావరి, భీమవరం]
@@ -57,7 +58,7 @@ tg.mahbubnagar: [మహబూబ్‌నగర్, మహబూబ్ నగర
 tg.mancherial: [మంచిర్యాల]
 tg.medak: [మెదక్]
 tg.medchal_malkajgiri: [మేడ్చల్]
-tg.nagarkurnool: [నాగర్‌కర్నూల్, నాగర్ కర్నూల్]
+tg.nagarkurnool: [నాగర్‌కర్నూలు, నాగర్ కర్నూలు, నాగర్‌కర్నూల్, నాగర్ కర్నూల్]
 tg.nalgonda: [నల్గొండ, నల్లగొండ]
 tg.narayanpet: [నారాయణపేట]
 tg.nirmal: [నిర్మల్ జిల్లా]

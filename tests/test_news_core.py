@@ -216,3 +216,32 @@ def test_mandi_towns_name_their_district():
     assert tag("Rythu groups meet")["districts"] == []  # the yard's word, not a town
     assert tag("Diamond prices fall")["districts"] == []  # a word of a two-word name names nothing
     assert tag("Fishers in Diamond Harbour")["districts"] == ["wb.south_24"]
+
+
+def test_telugu_lookalike_words_do_not_name_places():
+    import yaml
+
+    names = yaml.safe_load((Path(__file__).parent.parent / "farmuncle_pipeline" / "news" / "place_names.yaml").read_text(encoding="utf-8"))
+    index = place_index(TWO_STATES, [], names)
+    tag = lambda title: tag_places({"title": title, "summary": "", "districts": [], "states": []}, index)  # noqa: E731
+    for title in ("డీఏపీ ఎరువు కొరత", "ఏపీఎంసీ యార్డులో కొనుగోళ్లు", "జగన్నాథపురం రైతులు", "తిరుపతి రెడ్డి మాట్లాడారు", "కడపటి వార్తలు"):
+        assert tag(title)["states"] == [], title
+    assert tag("ఏపీలో వర్షాలు")["states"] == ["ap"] and tag("జగన్ పర్యటన")["states"] == ["ap"]
+    assert tag("కడపలో వర్షం")["districts"] == ["ap.cuddapah", "ap.ysr_kadapa"]
+
+
+def test_a_longer_place_name_hides_the_shorter_one_inside_it():
+    import yaml
+
+    names = yaml.safe_load((Path(__file__).parent.parent / "farmuncle_pipeline" / "news" / "place_names.yaml").read_text(encoding="utf-8"))
+    index = place_index(TWO_STATES, [], names)
+    for title in ("నాగర్‌కర్నూలు రైతులు", "నాగర్ కర్నూలు రైతులు", "నాగర్‌కర్నూల్ రైతులు"):
+        s = tag_places({"title": title, "summary": "", "districts": [], "states": []}, index)
+        assert s["districts"] == ["tg.nagarkurnool"] and s["states"] == ["tg"], title
+
+
+def test_mandi_names_that_are_everyday_words_name_nothing():
+    words = ["a_lot", "shakti", "mandal", "lanka", "tarana"]
+    index = place_index([{"id": f"mp.ratlam.{w}", "district": "mp.ratlam", "state": "mp"} for w in words], [])
+    for title in ("A lot of farmers lost crops", "Mandal officers visit", "Shakti scheme for women", "Sri Lanka exports"):
+        assert tag_places({"title": title, "summary": "", "districts": [], "states": []}, index)["states"] == [], title

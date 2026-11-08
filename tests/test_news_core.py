@@ -187,6 +187,9 @@ def test_two_state_feed_story_goes_to_the_state_it_names():
     assert states("తెలంగాణ రైతులకు సాయం") == ["tg"]
     assert states("రైతులకు సాయం") == ["ap", "tg"]  # names neither: both states' readers may want it
     assert states("కర్నూలు, తెలంగాణ రైతులు") == ["ap", "tg"]
+    leaning = feed(language="te", level="state", states=["ap", "tg"], unplaced=["tg"])
+    assert settle_states(tag_places(parse_items(xml.format("రైతులకు సాయం").encode(), leaning)[0], index), leaning)["states"] == ["tg"]
+    assert settle_states(tag_places(parse_items(xml.format("కర్నూలు రైతులు").encode(), leaning)[0], index), leaning)["states"] == ["ap"]
     one = feed(language="te", level="state", states=["tg"])
     assert settle_states(tag_places(parse_items(xml.format("రైతులు").encode(), one)[0], index), one)["states"] == ["tg"]
 
@@ -197,3 +200,19 @@ def test_place_names_file_covers_every_andhra_and_telangana_district():
     names = yaml.safe_load((Path(__file__).parent.parent / "farmuncle_pipeline" / "news" / "place_names.yaml").read_text(encoding="utf-8"))
     assert sum(c.startswith("ap.") for c in names) == 31 and sum(c.startswith("tg.") for c in names) == 34
     assert names["ap"] and names["tg"] and all(names.values())
+
+
+def test_mandi_towns_name_their_district():
+    mandis = [{"id": "tg.nizamabad.bichkunda", "district": "tg.nizamabad", "state": "tg"},
+              {"id": "ap.west_godavari.tanuku_ff_v_tanuku", "district": "ap.west_godavari", "state": "ap"},
+              {"id": "ka.mysuru.hunsur", "district": "ka.mysuru", "state": "ka"}, {"id": "ka.kodagu.hunsur", "district": "ka.kodagu", "state": "ka"},
+              {"id": "tg.hyderabad.rythu_bazar", "district": "tg.hyderabad", "state": "tg"},
+              {"id": "wb.south_24.diamond_harbour", "district": "wb.south_24", "state": "wb"}]
+    index = place_index(mandis, [])
+    tag = lambda title: tag_places({"title": title, "summary": "", "districts": [], "states": []}, index)  # noqa: E731
+    assert tag("Bichkunda: రైతులకు అవగాహన")["districts"] == ["tg.nizamabad"]
+    assert tag("Tanuku farmers")["states"] == ["ap"]
+    assert tag("Hunsur tobacco")["districts"] == []  # two districts have a Hunsur
+    assert tag("Rythu groups meet")["districts"] == []  # the yard's word, not a town
+    assert tag("Diamond prices fall")["districts"] == []  # a word of a two-word name names nothing
+    assert tag("Fishers in Diamond Harbour")["districts"] == ["wb.south_24"]

@@ -138,3 +138,27 @@ def test_build_files_newest_first_and_capped():
     files = build_files([story(str(i), f"w{i} x{i} y{i}", hours=i % 70) for i in range(200)], NOW)
     got = files["news/india/en.json"]["stories"]
     assert len(got) == 150 and got == sorted(got, key=lambda s: s["published"], reverse=True)
+
+
+def test_farm_policy_and_politics_count_as_farm_news():
+    farm = lambda title, lang="en": is_farm({"title": title, "summary": "", "lang": lang}, False)  # noqa: E731
+    assert farm("Opposition demands legal guarantee on minimum support price in monsoon session")
+    assert farm("Centre lifts onion export ban ahead of polls")
+    assert farm("State announces loan waiver of Rs 2 lakh")
+    assert farm("PM-Kisan 21st instalment released")
+    assert farm("Paddy procurement begins in Punjab")
+    assert farm("Drought declared in 120 taluks")
+    assert farm("తెలంగాణలో రుణమాఫీ నిధులు విడుదల", "te")
+    assert farm("धान की सरकारी खरीद शुरू, कर्ज माफी पर फैसला", "hi")
+    assert farm("ಭತ್ತಕ್ಕೆ ಬೆಂಬಲ ಬೆಲೆ ಘೋಷಣೆ", "kn")
+    assert not farm("Monsoon session of Parliament begins")  # "monsoon" here is not the rain
+    assert not farm("Defence procurement deal signed")
+
+
+def test_indic_crop_words_do_not_match_lookalike_words():
+    farm = lambda title, lang: is_farm({"title": title, "summary": "", "lang": lang}, False)  # noqa: E731
+    assert not farm("ಕ್ರೀಡೆಯಲ್ಲಿ ಆಸಕ್ತಿ ಬೆಳೆಸಿಕೊಳ್ಳಬೇಕು", "kn")  # ಬೆಳೆಸು "to develop", not ಬೆಳೆ "crop"
+    assert not farm("ನಗರ ಬೆಳೆಯುತ್ತಿದ್ದಂತೆ ಸಂಚಾರ ಸಮಸ್ಯೆ", "kn")
+    assert farm("ಮಳೆ ಕೊರತೆ, ಬೆಳೆ ನಷ್ಟ", "kn") and farm("ಕಬ್ಬು ಬೆಳೆಗಾರರಿಗೆ ಸಿಹಿ ಸುದ್ದಿ", "kn")
+    assert not farm("క్యాన్సర్ కణితి కాదు.. పంటి ముక్క", "te")  # పంటి "tooth", not పంట "crop"
+    assert farm("నీళ్లు లేవు.. పంటలు వేయొద్దు", "te")

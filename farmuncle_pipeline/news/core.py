@@ -31,16 +31,20 @@ class Feed(TypedDict, total=False):
 
 # From the app's old googleNews.ts. Substring match on purpose: Indic words inflect at the end ("ರೈತ" catches "ರೈತರಿಗೆ").
 AGRI_TERMS: dict[str, list[str]] = {
-    "en": ["agricultur", "farm", "crop", r"mandis?\b", "monsoon", "harvest", "kisan", r"msp\b","fertiliser", "fertilizer", "irrigation"],
-    "hi": ["कृषि", "किसान", "फसल", "मंडी", "खेती"],
-    "te": ["వ్యవసాయం", "రైతు", "పంట"],
-    "kn": ["ಕೃಷಿ", "ರೈತ", "ಬೆಳೆ"],
-    "ta": ["விவசாய", "பயிர்"],
-    "ml": ["കൃഷി", "കർഷക", "വിള"],
+    "en": ["agricultur", "agrarian", "farm", "crop", r"mandis?\b", r"monsoon\b(?! session)", "harvest", "kisan", r"msp\b",
+           "fertiliser", "fertilizer", "irrigation", "drought", "paddy", "sugarcane", "rythu",
+           # Farm policy and politics that reach every farmer: support prices, loan waivers, PM-Kisan, export bans, procurement.
+           "minimum support price", "loan waiver", r"pm[- ]kisan", "fasal bima", r"(onion|rice|wheat|sugar) exports?\b",
+           r"export ban on (onion|rice|wheat|sugar)", r"(paddy|wheat|grain|crop) procurement"],
+    "hi": ["कृषि", "किसान", "फसल", "मंडी", "खेती", "एमएसपी", "समर्थन मूल्य", "कर्ज माफी", "कर्जमाफी", "धान", "गेहूं", "गन्ना",
+           "उर्वरक", "सिंचाई", "सूखा"],
+    "te": ["వ్యవసాయం", "రైతు", "పంట(?!ి)","మద్దతు ధర", "రుణమాఫీ", "ధాన్యం", "ఎరువు", "కరువు"],
+    "kn": ["ಕೃಷಿ", "ರೈತ", "ಬೆಳೆ(?![ಸಯದ])","ಬೆಂಬಲ ಬೆಲೆ", "ಸಾಲ ಮನ್ನಾ", "ಭತ್ತ", "ಕಬ್ಬು", "ರಸಗೊಬ್ಬರ", "ನೀರಾವರಿ"],
+    "ta": ["விவசாய", "பயிர்", "ஆதரவு விலை", "கடன் தள்ளுபடி", "கரும்பு", "பாசன"],
+    "ml": ["കൃഷി", "കർഷക", "വിള", "താങ്ങുവില", "നെല്ല്", "റബ്ബർ", "ജലസേചന"],
 }
 BLOCK_TERMS: dict[str, list[str]] = {
-    "en": ["sensex", "nifty", "stock market", "share price", "cricket", "film", "movie", "bollywood", "box office",
-           "monsoon session", "farmhouse"],
+    "en": ["sensex", "nifty", "stock market", "share price", "cricket", "film", "movie", "bollywood", "box office", "farmhouse"],
     "hi": ["सेंसेक्स", "निफ्टी", "शेयर बाजार", "क्रिकेट", "फिल्म"],
     "te": ["సెన్సెక్స్", "నిఫ్టీ", "స్టాక్ మార్కెట్", "క్రికెట్", "సినిమా"],
     "kn": ["ಸೆನ್ಸೆಕ್ಸ್", "ನಿಫ್ಟಿ", "ಷೇರು", "ಕ್ರಿಕೆಟ್", "ಸಿನಿಮಾ"],
@@ -103,9 +107,10 @@ def parse_items(xml: bytes, feed: Feed) -> list[dict]:
 
 
 def _has(text: str, terms: list[str], latin: bool) -> bool:
-    # English terms are regex stems that must start a word ("farm" is not in "pharmacy"); "mandi" must also end one, or
-    # "Mandir" matches. Indic terms match anywhere.
-    return any(re.search(r"\b" + t, text) if latin else t in text for t in terms)
+    # All terms are regex stems. English ones must start a word ("farm" is not in "pharmacy"; "mandi" must also end one,
+    # or "Mandir" matches). Indic ones match anywhere, since words inflect at the end, except lookalikes they exclude
+    # (ಬೆಳೆಸು "to develop" is not ಬೆಳೆ "crop"; పంటి "tooth" is not పంట "crop").
+    return any(re.search((r"\b" if latin else "") + t, text) for t in terms)
 
 
 def is_farm(story: dict, farm_only: bool) -> bool:

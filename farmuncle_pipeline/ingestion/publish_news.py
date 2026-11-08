@@ -21,9 +21,10 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
-from farmuncle_pipeline.news.core import Feed, build_files, is_farm, merge, parse_items, place_index, tag_places
+from farmuncle_pipeline.news.core import Feed, build_files, is_farm, merge, parse_items, place_index, settle_states, tag_places
 
 FEEDS_FILE = Path(__file__).resolve().parent.parent / "news" / "feeds.yaml"
+NAMES_FILE = FEEDS_FILE.with_name("place_names.yaml")
 LANGUAGES, LEVELS = ("en", "hi", "kn", "te", "ta", "ml"), ("national", "state", "city", "world")
 STATE_KEY, INDEX_KEY = "news/_state.json", "news/index.json"
 REPO = "https://github.com/praneeth0100/farmuncle-pipeline"
@@ -34,6 +35,12 @@ def load_feeds(path: Path = FEEDS_FILE) -> list[Feed]:
     import yaml
 
     return [{"states": [], "farm_only": False, **f} for f in yaml.safe_load(path.read_text(encoding="utf-8"))["feeds"]]
+
+
+def load_names(path: Path = NAMES_FILE) -> dict[str, list[str]]:
+    import yaml
+
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
 def _encode(payload: dict) -> bytes:
@@ -52,7 +59,7 @@ def _read(store, key: str, default):
 
 def run(store, http, feeds: list[Feed], now: datetime, contact: str = "") -> dict:
     """Fetch every feed once, merge with the saved 72 h, write every file. Exits non-zero when more than half the feeds failed."""
-    index = place_index(_read(store, "catalog/mandis.json", {"mandis": []})["mandis"], _read(store, "catalog/states.json", {"states": []})["states"])
+    index = place_index(_read(store, "catalog/mandis.json", {"mandis": []})["mandis"], _read(store, "catalog/states.json", {"states": []})["states"], load_names())
     state = _read(store, STATE_KEY, {"feeds": {}, "stories": []})
     old_files = _read(store, INDEX_KEY, {}).get("files", {})
     agent = f"AgroUncleNews/1.0 (+{contact or REPO})"
@@ -65,7 +72,7 @@ def run(store, http, feeds: list[Feed], now: datetime, contact: str = "") -> dic
             status, reply_headers, body = http(feed["url"], headers)
             if status == 304:
                 return feed, 304, saved, []
-            stories = [tag_places(s, index) for s in parse_items(body, feed) if is_farm(s, feed.get("farm_only", False))]
+            stories = [settle_states(tag_places(s, index), feed) for s in parse_items(body, feed) if is_farm(s, feed.get("farm_only", False))]
             return feed, status, {"etag": reply_headers.get("ETag"), "modified": reply_headers.get("Last-Modified")}, stories
         except Exception as error:  # noqa: BLE001 — one dead feed must not stop the others; its saved stories stay
             print(f"[news] {feed['id']} failed: {error}", flush=True)

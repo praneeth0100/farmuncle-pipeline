@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from farmuncle_pipeline.news.core import build_files, is_farm, merge, parse_items, picture, place_index, same_story, tag_places
+from farmuncle_pipeline.news.core import build_files, is_farm, merge, parse_items, picture, place_index, same_story, settle_states, tag_places
 
 FIX = Path(__file__).parent / "fixtures" / "news"
 NOW = datetime(2026, 11, 6, 12, 0, tzinfo=timezone.utc)
@@ -162,3 +162,38 @@ def test_indic_crop_words_do_not_match_lookalike_words():
     assert farm("ಮಳೆ ಕೊರತೆ, ಬೆಳೆ ನಷ್ಟ", "kn") and farm("ಕಬ್ಬು ಬೆಳೆಗಾರರಿಗೆ ಸಿಹಿ ಸುದ್ದಿ", "kn")
     assert not farm("క్యాన్సర్ కణితి కాదు.. పంటి ముక్క", "te")  # పంటి "tooth", not పంట "crop"
     assert farm("నీళ్లు లేవు.. పంటలు వేయొద్దు", "te")
+
+
+TELUGU = {"ap": ["ఆంధ్రప్రదేశ్"], "tg": ["తెలంగాణ"], "ap.kurnool": ["కర్నూలు"], "tg.mahbubnagar": ["మహబూబ్‌నగర్"],
+          "ap.anantapur": ["అనంతపుర"], "ap.ananthapuramu": ["అనంతపుర"]}
+TWO_STATES = [{"district": "ap.kurnool", "state": "ap"}, {"district": "tg.khammam", "state": "tg"}]
+
+
+def test_telugu_names_tag_districts_inside_inflected_words():
+    index = place_index(TWO_STATES, [], TELUGU)
+    tag = lambda title: tag_places({"title": title, "summary": "", "districts": [], "states": []}, index)  # noqa: E731
+    s = tag("కర్నూలులో వర్షం")
+    assert s["districts"] == ["ap.kurnool"] and s["states"] == ["ap"]
+    assert tag("మహబూబ్నగర్ రైతులు")["states"] == ["tg"]  # with or without the invisible joiner U+200C
+    assert tag("అనంతపురంలో పంట")["districts"] == ["ap.anantapur", "ap.ananthapuramu"]  # two catalog spellings, one place
+
+
+def test_two_state_feed_story_goes_to_the_state_it_names():
+    two = feed(language="te", level="state", states=["ap", "tg"])
+    index = place_index(TWO_STATES, [], TELUGU)
+    xml = """<rss><channel><item><title>{}</title><link>https://x/a</link><pubDate>Fri, 06 Nov 2026 10:00:00 GMT</pubDate></item></channel></rss>"""
+    states = lambda title: settle_states(tag_places(parse_items(xml.format(title).encode(), two)[0], index), two)["states"]  # noqa: E731
+    assert states("కర్నూలు రైతులకు సాయం") == ["ap"]
+    assert states("తెలంగాణ రైతులకు సాయం") == ["tg"]
+    assert states("రైతులకు సాయం") == ["ap", "tg"]  # names neither: both states' readers may want it
+    assert states("కర్నూలు, తెలంగాణ రైతులు") == ["ap", "tg"]
+    one = feed(language="te", level="state", states=["tg"])
+    assert settle_states(tag_places(parse_items(xml.format("రైతులు").encode(), one)[0], index), one)["states"] == ["tg"]
+
+
+def test_place_names_file_covers_every_andhra_and_telangana_district():
+    import yaml
+
+    names = yaml.safe_load((Path(__file__).parent.parent / "farmuncle_pipeline" / "news" / "place_names.yaml").read_text(encoding="utf-8"))
+    assert sum(c.startswith("ap.") for c in names) == 31 and sum(c.startswith("tg.") for c in names) == 34
+    assert names["ap"] and names["tg"] and all(names.values())

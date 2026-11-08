@@ -5,6 +5,8 @@
 # Dainik Jagran (404), Down To Earth, Gaon Connection, Udayavani, Vikatan, Manorama, Agrowon (no working feed found),
 # PIB (no pictures). 8 Nov 2026: no national Telugu farm feed found (Krishi Jagran Telugu 522, News18 regional
 # editions 404); Krishi Jagran Malayalam is months stale; Kannada/Tamil Krishi Jagran 404.
+# Telugu outlets tried 8 Nov 2026 and left out: Disha (stale since June), Eenadu and ABP Desam (empty feeds), Andhra Jyothy and
+# Samayam (404), TV5 (403), Andhra Prabha (almost no pictures). Sakshi and Indian Express answer 403 to GitHub's servers.
 feeds:
   # National farm sections (English)
   - {id: hindu_agri, outlet: The Hindu, url: "https://www.thehindu.com/sci-tech/agriculture/feeder/default.rss", language: en, level: national, farm_only: true}
@@ -26,12 +28,26 @@ feeds:
   - {id: hindu_telangana, outlet: The Hindu, url: "https://www.thehindu.com/news/national/telangana/feeder/default.rss", language: en, level: state, states: [tg]}
   - {id: hindu_kerala, outlet: The Hindu, url: "https://www.thehindu.com/news/national/kerala/feeder/default.rss", language: en, level: state, states: [kl]}
   - {id: hindu_bengaluru, outlet: The Hindu, url: "https://www.thehindu.com/news/cities/bangalore/feeder/default.rss", language: en, level: city, states: [ka], districts: [ka.bangalore, ka.bengaluru]}
+  - {id: hindu_vijayawada, outlet: The Hindu, url: "https://www.thehindu.com/news/cities/Vijayawada/feeder/default.rss", language: en, level: city, states: [ap], districts: [ap.ntr, ap.krishna]}
+  - {id: hindu_visakhapatnam, outlet: The Hindu, url: "https://www.thehindu.com/news/cities/Visakhapatnam/feeder/default.rss", language: en, level: city, states: [ap], districts: [ap.visakhapatnam]}
+  - {id: hindu_hyderabad, outlet: The Hindu, url: "https://www.thehindu.com/news/cities/Hyderabad/feeder/default.rss", language: en, level: city, states: [tg], districts: [tg.hyderabad]}
   - {id: toi_bengaluru, outlet: Times of India, url: "https://timesofindia.indiatimes.com/rssfeeds/-2128833038.cms", language: en, level: city, states: [ka], districts: [ka.bangalore, ka.bengaluru]}
   # States (own languages)
   - {id: prajavani, outlet: Prajavani, url: "https://www.prajavani.net/stories.rss", language: kn, level: state, states: [ka]}
   - {id: tv9_kannada, outlet: TV9 Kannada, url: "https://tv9kannada.com/feed", language: kn, level: state, states: [ka]}
-  - {id: tv9_telugu, outlet: TV9 Telugu, url: "https://tv9telugu.com/feed", language: te, level: state, states: [ap, tg]}
   - {id: ntnews, outlet: Namasthe Telangana, url: "https://www.ntnews.com/feed", language: te, level: state, states: [tg]}
+  - {id: ntv_ap, outlet: NTV Telugu, url: "https://ntvtelugu.com/andhra-pradesh-news/feed", language: te, level: state, states: [ap]}
+  - {id: ntv_tg, outlet: NTV Telugu, url: "https://ntvtelugu.com/telangana-news/feed", language: te, level: state, states: [tg]}
+  - {id: tentv_ap, outlet: 10TV, url: "https://10tv.in/andhra-pradesh/feed", language: te, level: state, states: [ap]}
+  - {id: tentv_tg, outlet: 10TV, url: "https://10tv.in/telangana/feed", language: te, level: state, states: [tg]}
+  - {id: tv9_telugu_ap, outlet: TV9 Telugu, url: "https://tv9telugu.com/andhra-pradesh/feed", language: te, level: state, states: [ap]}
+  - {id: tv9_telugu_tg, outlet: TV9 Telugu, url: "https://tv9telugu.com/telangana/feed", language: te, level: state, states: [tg]}
+  - {id: asianet_telugu_ap, outlet: Asianet News Telugu, url: "https://telugu.asianetnews.com/rss/andhra-pradesh", language: te, level: state, states: [ap]}
+  - {id: asianet_telugu_tg, outlet: Asianet News Telugu, url: "https://telugu.asianetnews.com/rss/telangana", language: te, level: state, states: [tg]}
+  - {id: bigtv_ap, outlet: BigTV, url: "https://www.bigtvlive.com/andhra-pradesh/feed", language: te, level: state, states: [ap]}
+  - {id: bigtv_tg, outlet: BigTV, url: "https://www.bigtvlive.com/telangana/feed", language: te, level: state, states: [tg]}
+  - {id: hmtv, outlet: HMTV, url: "https://www.hmtvlive.com/feed", language: te, level: state, states: [ap, tg], unplaced: [tg]}  # its hyperlocal headlines are mostly Telangana towns
+  - {id: mana_telangana, outlet: Mana Telangana, url: "https://www.manatelangana.news/feed", language: te, level: state, states: [tg]}
   - {id: v6_velugu, outlet: V6 Velugu, url: "https://www.v6velugu.com/feed", language: te, level: state, states: [tg]}
   - {id: sakshi, outlet: Sakshi, url: "https://www.sakshi.com/rss.xml", language: te, level: state, states: [ap, tg]}
   - {id: mathrubhumi, outlet: Mathrubhumi, url: "https://www.mathrubhumi.com/rss", language: ml, level: state, states: [kl]}

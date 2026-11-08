@@ -34,15 +34,17 @@ Files are gzipped (`Content-Encoding: gzip`) with `Cache-Control: public, max-ag
 3. Farm filter: agriculture sections keep everything; other feeds keep items whose headline or description has a farm
    word and no block word (Sensex, cricket, film…) in English or the feed's language. Lists in `news/core.py`.
 4. Place tags: district and state names come from the codes (`bengaluru_rural` → "bengaluru rural", plus a distinctive
-   single word) and state names from `catalog/states.json`. English only for now: regional-language stories land in
-   State, not District.
+   single word), state names from `catalog/states.json`, and regional-script names from `news/place_names.yaml`
+   (Telugu for every Andhra and Telangana district so far; other languages' stories land in State, not District).
+   A mandi's whole name also names its district. A feed listing two states sends each story to the state it names;
+   naming neither, to its `unplaced` states, else both. Prefer an outlet's one-state section feeds where they exist.
 5. Merge with the saved stories, drop anything older than 72 hours, fold the same story from two outlets
    (headline-word overlap ≥ 0.5), write every file.
 
 ## The feed list
 
 `farmuncle_pipeline/news/feeds.yaml`. Each entry: `id`, `outlet` (shown on the card), `url`, `language`, `level`,
-`states` (state and city feeds), optional `districts` (city feeds), `farm_only`, `upgrade_images`.
+`states` (state and city feeds), optional `districts` (city feeds), `unplaced`, `farm_only`, `upgrade_images`.
 
 - **Drop a feed:** delete its line. Its stories age out of the files within 72 hours.
 - **Add a feed:** check that it has items, that pictures come through, and that `level`/`states` are right; run

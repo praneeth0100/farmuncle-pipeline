@@ -26,6 +26,7 @@ class Feed(TypedDict, total=False):
     states: list[str]  # state codes from catalog/mandis.json
     districts: list[str]  # city feeds: the district codes the city sits in
     farm_only: bool  # an agriculture section: every item is farm news
+    unplaced: list[str]  # a multi-state feed: where stories naming no place go (default: all its states)
     upgrade_images: bool  # the feed lists http:// pictures that its host also serves over https
 
 
@@ -54,7 +55,7 @@ BLOCK_TERMS: dict[str, list[str]] = {
 # The published catalog spells some states unlike the press does.
 STATE_ALIASES = {"kl": ["kerala"], "cg": ["chhattisgarh"], "dl": ["delhi"], "od": ["orissa"], "uk": ["uttaranchal"]}
 # District-name words that are also everyday words or people's names, so alone they name no district.
-NOT_PLACES = {"erode", "anand", "sagar", "krishna", "lower", "middle", "upper", "paschim", "purba", "uttara", "dakshina", "reddy", "gautam", "kabir", "ranga",
+NOT_PLACES = {"a lot", "shakti", "mandal", "lanka", "tarana", "nagar", "bhavani", "govardhan", "premium", "matar", "raman", "mahesh", "kishan", "janata", "islam", "erode", "anand", "sagar", "krishna", "lower", "middle", "upper", "paschim", "purba", "uttara", "dakshina", "reddy", "gautam", "kabir", "ranga",
               "siddharth", "chhota", "dehat", "thana", "champa", "yamuna", "dwarka", "malwa", "sathya", "sitharama", "alluri",
               "somnath", "manpur", "khiri", "devbhumi", "sounth", "chattrapati", "jayashankar", "rajanna", "baroda"}
 STORY_KEYS = ("id", "title", "link", "outlet", "published", "lang", "image", "level", "districts", "states", "farm")
@@ -101,7 +102,7 @@ def parse_items(xml: bytes, feed: Feed) -> list[dict]:
             continue
         out.append({"id": hashlib.sha1(link.encode()).hexdigest(), "title": title, "link": link, "outlet": feed["outlet"],
                     "published": time.strftime(_ISO, stamp), "lang": feed["language"], "image": picture(e, feed.get("upgrade_images", False)),
-                    "level": feed["level"], "districts": list(feed.get("districts", [])), "states": list(feed.get("states", [])),
+                    "level": feed["level"], "districts": list(feed.get("districts", [])), "states": list(feed.get("states", [])) if len(feed.get("states", [])) == 1 else [],  # settle_states decides for two-state feeds
                     "farm": bool(feed.get("farm_only")), "summary": _text(e.get("summary", ""))[:500]})
     return out
 
@@ -125,10 +126,17 @@ def is_farm(story: dict, farm_only: bool) -> bool:
 class PlaceIndex(TypedDict):
     pattern: re.Pattern | None
     codes: dict[str, tuple[str, str | None]]  # lower-case name → (state code, district code or None)
+    native: list[tuple[re.Pattern, list[tuple[str, str | None]]]]  # longest name first: its pattern, its (state, district or None) places
 
 
-def place_index(mandis: list[dict], states: list[dict]) -> PlaceIndex:
-    """English names from the codes: "ka.bengaluru_urban" → "bengaluru urban", plus each 5+ letter word only one district has."""
+def _plain(text: str) -> str:
+    # Indic text carries invisible joiners in some spellings of the same word (మహబూబ్‌నగర్).
+    return text.replace("‌", "").replace("‍", "")
+
+
+def place_index(mandis: list[dict], states: list[dict], native: dict[str, list[str]] | None = None) -> PlaceIndex:
+    """English names from the codes: "ka.bengaluru_urban" → "bengaluru urban", plus each 5+ letter word only one district has.
+    `native` (place_names.yaml) adds regional-script names: code → names."""
     codes: dict[str, tuple[str, str | None]] = {}
     districts = {m["district"]: m["state"] for m in mandis if m.get("district") and m.get("state")}
     owners: dict[str, set[str]] = defaultdict(set)
@@ -146,22 +154,55 @@ def place_index(mandis: list[dict], states: list[dict]) -> PlaceIndex:
         for word in words:
             if len(word) >= 5 and owners[word] == {code} and word not in NOT_PLACES:
                 codes.setdefault(word, (state, code))
+    # A mandi's whole name (id's last part, "diamond_harbour") names its district when no other district has that name.
+    # Whole names only: first words alone are "weekly", "railway", "north".
+    town_districts: dict[str, set[str]] = defaultdict(set)
+    for m in mandis:
+        if m.get("id", "").count(".") == 2 and m.get("district"):
+            town_districts[m["id"].split(".")[2].split("_ff_")[0].replace("_", " ")].add(m["district"])
+    for town, owners_of_town in town_districts.items():
+        if len(town) >= 5 and len(owners_of_town) == 1 and town not in NOT_PLACES:
+            code = next(iter(owners_of_town))
+            codes.setdefault(town, (districts[code], code))
     for s in states:
         for name in [s["name"].lower(), *STATE_ALIASES.get(s["id"], [])]:
             codes[name] = (s["id"], None)  # a state name wins over a district word of the same spelling
+    regional: dict[str, list[tuple[str, str | None]]] = defaultdict(list)
+    for code, native_names in (native or {}).items():
+        for name in native_names:
+            regional[_plain(name)].append((code.split(".")[0], code if "." in code else None))
     names = sorted(codes, key=len, reverse=True)
-    return {"pattern": re.compile(r"\b(" + "|".join(map(re.escape, names)) + r")\b") if names else None, "codes": codes}
+    return {"pattern": re.compile(r"\b(" + "|".join(map(re.escape, names)) + r")\b") if names else None, "codes": codes,
+            "native": [(re.compile(name), places) for name, places in sorted(regional.items(), key=lambda item: len(item[0]), reverse=True)]}
 
 
 def tag_places(story: dict, index: PlaceIndex) -> dict:
     found_d, found_s = set(story["districts"]), set(story["states"])
+    text = f"{story['title']} {story.get('summary', '')}"
     if index["pattern"]:
-        for name in index["pattern"].findall(f"{story['title']} {story.get('summary', '')}".lower()):
+        for name in index["pattern"].findall(text.lower()):
             state, district = index["codes"][name]
             found_s.add(state)
             if district:
                 found_d.add(district)
+    plain = _plain(text)
+    for pattern, places in index["native"]:
+        plain, hits = pattern.subn(" ", plain)  # blanked, so నాగర్ కర్నూలు does not also read as కర్నూలు
+        if hits:
+            for state, district in places:
+                found_s.add(state)
+                if district:
+                    found_d.add(district)
     return {**story, "districts": sorted(found_d), "states": sorted(found_s)}
+
+
+def settle_states(story: dict, feed: Feed) -> dict:
+    """A feed covering several states: the story goes to those it names; naming none, to the feed's `unplaced` states
+    (where its unplaced stories turn out to be from), else to all of them."""
+    covers = feed.get("states", [])
+    if len(covers) < 2 or set(story["states"]) & set(covers):
+        return story
+    return {**story, "states": sorted({*story["states"], *feed.get("unplaced", covers)})}
 
 
 def _words(text: str) -> set[str]:

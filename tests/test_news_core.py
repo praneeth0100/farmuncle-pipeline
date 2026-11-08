@@ -60,6 +60,8 @@ def test_general_feed_needs_farm_word_and_no_block_word():
     assert not is_farm({"title": "Pharmacy prices", "summary": "", "lang": "en"}, False)  # "farm" must start a word
     assert not is_farm({"title": "Monsoon session of Parliament begins", "summary": "", "lang": "en"}, False)
     assert not is_farm({"title": "Body found at farmhouse", "summary": "", "lang": "en"}, False)
+    assert not is_farm({"title": "Satellite pics show Ram Mandir in Ayodhya", "summary": "", "lang": "en"}, False)  # "mandi" must end a word
+    assert is_farm({"title": "Onion arrivals rise at Lasalgaon mandis", "summary": "", "lang": "en"}, False)
 
 
 MANDIS = [{"id": "ka.bengaluru_urban.binny_mill", "district": "ka.bengaluru_urban", "state": "ka"},

@@ -31,7 +31,7 @@ class Feed(TypedDict, total=False):
 
 # From the app's old googleNews.ts. Substring match on purpose: Indic words inflect at the end ("ರೈತ" catches "ರೈತರಿಗೆ").
 AGRI_TERMS: dict[str, list[str]] = {
-    "en": ["agricultur", "farm", "crop", "mandi", "monsoon", "harvest", "kisan", "msp", "fertiliser", "fertilizer", "irrigation"],
+    "en": ["agricultur", "farm", "crop", r"mandis?\b", "monsoon", "harvest", "kisan", r"msp\b","fertiliser", "fertilizer", "irrigation"],
     "hi": ["कृषि", "किसान", "फसल", "मंडी", "खेती"],
     "te": ["వ్యవసాయం", "రైతు", "పంట"],
     "kn": ["ಕೃಷಿ", "ರೈತ", "ಬೆಳೆ"],
@@ -103,8 +103,9 @@ def parse_items(xml: bytes, feed: Feed) -> list[dict]:
 
 
 def _has(text: str, terms: list[str], latin: bool) -> bool:
-    # English terms must start a word ("farm" is not in "pharmacy"); Indic ones match anywhere.
-    return any(re.search(r"\b" + re.escape(t), text) if latin else t in text for t in terms)
+    # English terms are regex stems that must start a word ("farm" is not in "pharmacy"); "mandi" must also end one, or
+    # "Mandir" matches. Indic terms match anywhere.
+    return any(re.search(r"\b" + t, text) if latin else t in text for t in terms)
 
 
 def is_farm(story: dict, farm_only: bool) -> bool:

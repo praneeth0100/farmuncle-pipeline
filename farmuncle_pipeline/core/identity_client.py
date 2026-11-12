@@ -236,6 +236,7 @@ class IdentityClient:
         self._preloaded = False
         self._mandi_exact: dict[tuple[str, str, str | None], int] = {}
         self._mandi_alias: dict[str, int] = {}
+        self._district_alias: dict[tuple[str, str], str] = {}
         self._crop_exact: dict[str, int] = {}
         self._crop_alias: dict[str, int] = {}
         # 2026-07-26: variety/grade preload snapshot, same shape as the
@@ -411,9 +412,9 @@ class IdentityClient:
             later.
         """
         try:
-            mandi_rows = self._fetch_all_rows(
-                "mandis", "id,normalized_name,state,district", {"status": "ACTIVE"}
-            )
+            # Every status: a MERGED row is the memory that its name in its old district now means the survivor.
+            mandi_rows = self._fetch_all_rows("mandis", "id,normalized_name,state,district,status,merged_into_id")
+            district_alias_rows = self._fetch_all_rows("district_aliases", "state,alias_district,canonical_district")
             mandi_alias_rows = self._fetch_all_rows(
                 "mandi_aliases", "mandi_id,normalized_alias"
             )
@@ -436,9 +437,24 @@ class IdentityClient:
         except Exception as exc:
             raise ConfigError(f"IdentityClient.preload failed: {exc}") from exc
 
-        self._mandi_exact = {
-            (row["normalized_name"], row["state"], row["district"]): row["id"]
-            for row in mandi_rows
+        by_id = {row["id"]: row for row in mandi_rows}
+
+        def survivor(row: dict) -> int | None:
+            for _ in range(10):  # mirrors find_or_create_mandi step 1b: follow merged_into_id to the ACTIVE row
+                if row.get("status", "ACTIVE") == "ACTIVE":
+                    return row["id"]
+                row = by_id.get(row.get("merged_into_id"))
+                if row is None:
+                    return None
+            return None
+
+        self._mandi_exact = {}
+        for row in sorted(mandi_rows, key=lambda r: r.get("status", "ACTIVE") != "ACTIVE"):  # ACTIVE rows win a key
+            target = survivor(row)
+            if target is not None:
+                self._mandi_exact.setdefault((row["normalized_name"], row["state"], row["district"]), target)
+        self._district_alias = {
+            (row["state"], row["alias_district"]): row["canonical_district"] for row in district_alias_rows
         }
         self._mandi_alias = {
             row["normalized_alias"]: row["mandi_id"] for row in mandi_alias_rows
@@ -522,8 +538,9 @@ class IdentityClient:
             return ResolvedEntity(id=self._mandi_cache[key], first_seen_this_run=False)
 
         if self._preloaded:
-            # shortcut: district aliases (district_aliases table) are not mirrored; it is empty today, add them if it fills.
-            preload_id = self._mandi_exact.get((_mandi_match_key(name), state, district.strip() if district else district))
+            # Mirrors normalize_district: an old district spelling is looked up under its current one.
+            plain = district.strip() if district else district
+            preload_id = self._mandi_exact.get((_mandi_match_key(name), state, self._district_alias.get((state, plain), plain)))
             if preload_id is None:
                 preload_id = self._mandi_alias.get(_mandi_match_key(name)) or self._mandi_alias.get(_normalize_market_name(name))
             if preload_id is not None:

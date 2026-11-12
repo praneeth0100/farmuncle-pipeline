@@ -156,6 +156,7 @@ class FakeIdentityDBClient:
         variety_aliases=None,
         grades=None,
         grade_aliases=None,
+        district_aliases=None,
         rpc_responses=None,
     ):
         # 2026-07-27: varieties/grades added — preload() has fetched these
@@ -176,6 +177,7 @@ class FakeIdentityDBClient:
             "variety_aliases": variety_aliases or [],
             "grades": grades or [],
             "grade_aliases": grade_aliases or [],
+            "district_aliases": district_aliases or [],
         }
         self._rpc_responses = rpc_responses or {}
         self.rpc_calls: list[tuple[str, dict]] = []
@@ -233,6 +235,40 @@ def test_resolve_mandi_preload_exact_match_skips_rpc_entirely():
     assert result.id == 42
     assert result.first_seen_this_run is False
     assert client.rpc_calls == []  # preload hit — no RPC round trip at all
+
+
+def test_resolve_mandi_preload_old_district_spelling_hits_current_district():
+    client = FakeIdentityDBClient(
+        mandis=[{"id": 5, "normalized_name": "rahuri", "state": "Maharashtra", "district": "Ahilyanagar"}],
+        district_aliases=[{"state": "Maharashtra", "alias_district": "Ahmednagar", "canonical_district": "Ahilyanagar"}],
+        rpc_responses={"find_or_create_mandi": 999},
+    )
+    identity = IdentityClient(client)
+    identity.preload()
+
+    result = identity.resolve_mandi(name="Rahuri APMC", state="Maharashtra", district="Ahmednagar", source=Source.RESOURCE_2)
+
+    assert result.id == 5
+    assert client.rpc_calls == []
+
+
+def test_resolve_mandi_preload_follows_a_merged_mandi_in_its_old_district():
+    # Hospet moved from Bellary into the new Vijayanagara district; the merged Bellary row remembers it.
+    client = FakeIdentityDBClient(
+        mandis=[
+            {"id": 9, "normalized_name": "hospet", "state": "Karnataka", "district": "Vijayanagara", "status": "ACTIVE", "merged_into_id": None},
+            {"id": 3, "normalized_name": "hospet", "state": "Karnataka", "district": "Bellary", "status": "MERGED", "merged_into_id": 9},
+        ],
+        rpc_responses={"find_or_create_mandi": 999},
+    )
+    identity = IdentityClient(client)
+    identity.preload()
+
+    old = identity.resolve_mandi(name="Hospet APMC", state="Karnataka", district="Bellary", source=Source.RESOURCE_2)
+    new = identity.resolve_mandi(name="Hospet APMC", state="Karnataka", district="Vijayanagara", source=Source.RESOURCE_2)
+
+    assert (old.id, new.id) == (9, 9)
+    assert client.rpc_calls == []
 
 
 def test_resolve_mandi_preload_alias_match_skips_rpc():

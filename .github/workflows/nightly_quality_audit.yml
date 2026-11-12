@@ -22,7 +22,7 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 15 # read-only queries against existing tables/views — should be seconds, not minutes
+    timeout-minutes: 30 # read-only, but takes 11-13 min on the full tables; at 15 it was cut off on 3 of 8 nights (5-12 Nov)
     steps:
       - uses: actions/checkout@v4
 

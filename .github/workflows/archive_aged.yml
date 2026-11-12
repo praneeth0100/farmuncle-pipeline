@@ -11,12 +11,21 @@ concurrency:
   group: warehouse-writer
   cancel-in-progress: false
 
+permissions:
+  contents: read
+  actions: read # the wait step lists archive_history runs
+
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
+
+      - name: Wait for a running archive_history window
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/warehouse_busy.sh history
 
       - uses: actions/setup-python@v5
         with:

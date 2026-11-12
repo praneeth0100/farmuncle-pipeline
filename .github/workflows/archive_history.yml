@@ -20,7 +20,7 @@ on:
         required: false
 
 concurrency:
-  group: warehouse-writer
+  group: archive-history # not warehouse-writer: queueing there cancelled the waiting nightly jobs (.github/scripts/warehouse_busy.sh)
   cancel-in-progress: false # a cancelled run would leave a half-ingested window and a RUNNING batch
 
 permissions:
@@ -57,6 +57,7 @@ jobs:
           MANDI_R2_BUCKET: ${{ secrets.MANDI_R2_BUCKET }}
         run: |
           set -o pipefail
+          if [ "$(bash .github/scripts/warehouse_busy.sh jobs)" = "busy" ]; then echo "a nightly warehouse job is waiting or running; it goes first, the hourly schedule resumes the backfill"; exit 0; fi
           args="--budget-minutes 300 --max-windows 1"
           if [ -n "${{ github.event.inputs.max_windows }}" ]; then args="$args --max-windows ${{ github.event.inputs.max_windows }}"; fi
           python -m farmuncle_pipeline.ingestion.archive_history $args | tee history.log
@@ -67,6 +68,8 @@ jobs:
           if [ "$aged" != "done" ]; then
             if [ "$aged" = "missing" ]; then gh workflow run nightly.yml --ref main; fi
             echo "nightly has not finished since $slot ($aged); it goes first, the backstop schedule resumes the backfill"
+          elif [ "$(bash .github/scripts/warehouse_busy.sh jobs)" = "busy" ]; then
+            echo "a nightly warehouse job is waiting; it goes first, the hourly schedule resumes the backfill"
           elif grep -qE "windows completed this run: [1-9]" history.log; then
             # GitHub's dispatch API sometimes answers 500; one failed call stopped the chain for hours (4 Nov), so try a few times.
             for wait in 0 15 60 180; do sleep $wait; gh workflow run archive_history.yml --ref main && break; done

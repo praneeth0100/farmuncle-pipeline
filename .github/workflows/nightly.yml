@@ -14,10 +14,14 @@ concurrency:
   group: warehouse-writer # archive_aged deletes warehouse days; archive_history must wait
   cancel-in-progress: false
 
+permissions:
+  contents: read
+  actions: read # the wait step lists archive_history runs
+
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 270
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
@@ -27,6 +31,11 @@ jobs:
       MANDI_R2_BUCKET: ${{ secrets.MANDI_R2_BUCKET }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Wait for a running archive_history window
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/warehouse_busy.sh history
 
       - uses: actions/setup-python@v5
         with:

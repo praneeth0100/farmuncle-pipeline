@@ -21,12 +21,21 @@ concurrency:
   group: warehouse-writer
   cancel-in-progress: false # see live_tick.yml for why
 
+permissions:
+  contents: read
+  actions: read # the wait step lists archive_history runs
+
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 120 # a night's backlog can be several dates of ~11 min each; the job itself stops starting new dates after 100 min
+    timeout-minutes: 210 # a night's backlog can be several dates of ~11 min each; the job itself stops starting new dates after 100 min
     steps:
       - uses: actions/checkout@v4
+
+      - name: Wait for a running archive_history window
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/warehouse_busy.sh history
 
       - uses: actions/setup-python@v5
         with:

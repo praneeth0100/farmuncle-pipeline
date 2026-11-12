@@ -55,16 +55,75 @@ def _fetch(db, table: str, select: str, **eq) -> list[dict]:
         start += PAGE
 
 
-def _fetch_prices(db, since: date) -> list[dict]:
-    rows, start = [], 0
+_PRICE_COLS = "id,mandi_id,crop_id,variety_id,grade_id,price_date,modal_price,min_price,max_price,created_at,updated_at"
+
+
+def _fetch_prices(db, since: date, changed_since: str | None = None) -> list[dict]:
+    rows, last_id = [], 0
     while True:
-        page = (db.table("mandi_daily_prices")
-                .select("id,mandi_id,crop_id,variety_id,grade_id,price_date,modal_price,min_price,max_price,created_at")
-                .gte("price_date", since.isoformat()).order("price_date").order("id").range(start, start + PAGE - 1).execute().data or [])
+        q = db.table("mandi_daily_prices").select(_PRICE_COLS).gte("price_date", since.isoformat())
+        if changed_since:
+            q = q.gte("updated_at", changed_since)
+        page = q.gt("id", last_id).order("id").limit(PAGE).execute().data or []
         rows.extend(page)
         if len(page) < PAGE:
             return rows
-        start += PAGE
+        last_id = page[-1]["id"]
+
+
+# The warehouse window and master data, kept in R2 between hourly runs: each run then downloads only the price rows
+# written since the last one (price_writer stamps updated_at on every write) instead of the whole window. Supabase bills
+# every downloaded byte as egress; R2 reads are free. Rebuilt in full when the window moves (once a day, at midnight IST),
+# and master data when it is older than MASTER_EVERY or a price row names an id it does not hold.
+SNAPSHOT_KEY = "state/publish_live_window.json.gz"
+MASTER_EVERY = timedelta(hours=6)
+MASTER_TABLES = {
+    "mandis": "id,public_id,name,display_name,state,status,merged_into_id,latitude,longitude",
+    "crops": "id,name,category,display_unit,status,merged_into_id",
+    "varieties": "id,crop_id,name,status,merged_into_id",
+    "grades": "id,name",
+}
+
+
+def _load_snapshot(store) -> dict | None:
+    try:
+        return json.loads(gzip.decompress(store.get(SNAPSHOT_KEY)))
+    except Exception:
+        return None
+
+
+def merge_window(old_rows: list[dict], changed: list[dict], since: date) -> list[dict]:
+    """Pure: the stored window with changed rows replacing theirs by id, and days that left the window dropped."""
+    by_id = {r["id"]: r for r in old_rows}
+    by_id.update({r["id"]: r for r in changed})
+    return [r for r in by_id.values() if r["price_date"] >= since.isoformat()]
+
+
+def _missing_ids(rows: list[dict], master: dict) -> bool:
+    known = {t: {m["id"] for m in master[t]} for t in ("mandis", "crops", "varieties", "grades")}
+    return any(r["mandi_id"] not in known["mandis"] or r["crop_id"] not in known["crops"]
+               or (r.get("variety_id") and r["variety_id"] not in known["varieties"])
+               or (r.get("grade_id") and r["grade_id"] not in known["grades"]) for r in rows)
+
+
+def window_data(db, store, since: date, now: datetime) -> tuple[list[dict], dict]:
+    snap = _load_snapshot(store)
+    stamp = now.isoformat()
+    if snap and snap.get("since") == since.isoformat() and snap.get("watermark"):
+        changed = _fetch_prices(db, since, changed_since=snap["watermark"])
+        rows = merge_window(snap["rows"], changed, since)
+        print(f"[publish_live] {len(changed)} price row(s) changed since the last run", flush=True)
+    else:
+        rows = _fetch_prices(db, since)
+        print(f"[publish_live] window read in full: {len(rows)} price rows", flush=True)
+    master, master_at = (snap or {}).get("master"), (snap or {}).get("master_at")
+    if not master or not master_at or now - datetime.fromisoformat(master_at) > MASTER_EVERY or _missing_ids(rows, master):
+        master = {t: _fetch(db, t, cols) for t, cols in MASTER_TABLES.items()}
+        master_at = stamp
+    watermark = max((r["updated_at"] for r in rows if r.get("updated_at")), default=(snap or {}).get("watermark"))
+    body = {"since": since.isoformat(), "watermark": watermark, "rows": rows, "master": master, "master_at": master_at}
+    store.put(SNAPSHOT_KEY, gzip.compress(json.dumps(body, separators=(",", ":")).encode()), "application/gzip")
+    return rows, master
 
 
 def assign_slugs(crops: list[dict], varieties: list[dict], registry: dict) -> dict:
@@ -320,12 +379,11 @@ def publish(db, store, now: datetime | None = None, *, all_homes: bool = False, 
     now = now or datetime.now(IST)
     today = now.astimezone(IST).date()
     print("[publish_live] reading the warehouse", flush=True)
-    mandis = _fetch(db, "mandis", "id,public_id,name,display_name,state,status,merged_into_id,latitude,longitude")
-    crops = _fetch(db, "crops", "id,name,category,display_unit,status,merged_into_id")
-    varieties = _fetch(db, "varieties", "id,crop_id,name,status,merged_into_id")
+    window, master = window_data(db, store, today - timedelta(days=WINDOW_DAYS), now)
+    mandis, crops, varieties, grades = (master[t] for t in ("mandis", "crops", "varieties", "grades"))
     codes = {r["state"]: r["code"] for r in _fetch_state_codes(db)}
-    prices = archive_rows(store, today) + _fetch_prices(db, today - timedelta(days=WINDOW_DAYS))
-    grades, stats = _fetch(db, "grades", "id,name"), _get_json(store, STATS_KEY) or {}
+    prices = archive_rows(store, today) + window
+    stats = _get_json(store, STATS_KEY) or {}
     files = build_files(prices=prices, mandis=mandis, crops=crops, varieties=varieties, grades=grades,
                         registry=_get_json(store, SLUGS_KEY) or {}, today=today, now=now, stats=stats)
     print(f"[publish_live] built {len(files) - 1} files", flush=True)

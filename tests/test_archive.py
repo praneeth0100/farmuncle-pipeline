@@ -546,3 +546,35 @@ def test_a_run_that_starts_while_the_feed_is_down_stops_at_once_without_touching
                         leftover_days=lambda after, up_to: [date(2026, 10, 27)],
                         record=lambda day, status, **kw: recorded.append((day, status)), **deps)
     assert log == [] and recorded == [] and done == 0 and state.next_end == date(2026, 10, 25)
+
+
+class _CountingDb(_Db):
+    """Answers the exact-count query with `count` rows, and records whether the day was downloaded."""
+
+    def __init__(self, rows, count):
+        super().__init__(rows)
+        self.count, self.downloaded, self._head = count, False, False
+
+    def select(self, *a, head=False, **k):
+        self._head = head
+        return self
+
+    def execute(self):
+        if self._head:
+            return SimpleNamespace(data=[], count=self.count)
+        if self.name == "mandi_daily_prices":
+            self.downloaded = True
+        return super().execute()
+
+
+def test_archive_day_uses_the_rows_just_written_when_the_warehouse_count_matches():
+    written = [_row(i) for i in range(3)]
+    db = _CountingDb(written, count=3)
+    result = archive_day(db, _Store(), date(2026, 10, 1), written=written)
+    assert result.rows == 3 and not db.downloaded
+
+
+def test_archive_day_reads_the_day_back_when_the_count_differs():
+    db = _CountingDb([_row(i) for i in range(4)], count=4)  # an earlier pull left a 4th row
+    result = archive_day(db, _Store(), date(2026, 10, 1), written=[_row(i) for i in range(3)])
+    assert result.rows == 4 and db.downloaded

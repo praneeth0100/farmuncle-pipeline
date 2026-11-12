@@ -190,7 +190,7 @@ def test_filter_rows_by_precedence_equal_precedence_passes_through():
     # (e.g. a retried page) is allowed — only STRICTLY higher
     # precedence blocks an overwrite, per the function's docstring.
     row = _price_row()
-    existing = {**row, "source": Source.RESOURCE_2.value}
+    existing = {**row, "source": Source.RESOURCE_2.value, "modal_price": 10}  # an earlier, different price
     client = _FakeSelectClient(existing_rows=[existing])
     kept, skipped = filter_rows_by_precedence(client, [row], Source.RESOURCE_2)
     assert kept == [row]
@@ -228,8 +228,20 @@ def test_filter_rows_by_precedence_own_row_may_replace_an_alias_row_and_itself()
     alias_existing = {**_price_row(), "source": Source.RESOURCE_2.value, "source_mandi_id": 2}
     own = {**_price_row(), "source_mandi_id": 1}
     assert filter_rows_by_precedence(_FakeSelectClient([alias_existing]), [own], Source.RESOURCE_2) == ([own], 0)
-    own_existing = {**_price_row(), "source": Source.RESOURCE_2.value, "source_mandi_id": 1}
+    own_existing = {**_price_row(), "source": Source.RESOURCE_2.value, "source_mandi_id": 1, "modal_price": 10}
     assert filter_rows_by_precedence(_FakeSelectClient([own_existing]), [own], Source.RESOURCE_2) == ([own], 0)
+
+
+def test_a_row_already_stored_unchanged_is_not_written_again():
+    from farmuncle_pipeline.core.price_writer import UNCHANGED
+
+    row = {**_price_row(), "source_mandi_id": 1, "modal_price": 25.0, "min_price": 20, "max_price": 30}
+    same = {**row, "source": Source.RESOURCE_1.value, "modal_price": "25.00", "min_price": 20.0, "max_price": "30"}
+    moved = {**same, "modal_price": 26}
+    kept, skipped = filter_rows_by_precedence(_FakeSelectClient([same]), [row], Source.RESOURCE_1)
+    assert skipped == 0 and kept[0][UNCHANGED] is True
+    kept, _ = filter_rows_by_precedence(_FakeSelectClient([moved]), [row], Source.RESOURCE_1)
+    assert UNCHANGED not in kept[0]  # a new price is written
 
 
 def test_filter_rows_by_precedence_reads_every_page_of_existing_rows():
@@ -302,13 +314,14 @@ class _FakePriceTable:
         self._client = client
         self._rows = None
 
-    def upsert(self, rows, on_conflict=None):
+    def upsert(self, rows, on_conflict=None, **_kw):
         self._rows = rows
         return self
 
     def execute(self):
         self._client._chunk_side_effect(self._rows)  # may raise
-        self._client.upserted_rows.extend(self._rows)
+        assert all(r.get("updated_at") for r in self._rows)  # every write is stamped (publish_live reads changes by it)
+        self._client.upserted_rows.extend({k: v for k, v in r.items() if k != "updated_at"} for r in self._rows)
         return FakeResponse(data=self._rows)
 
 
@@ -385,7 +398,7 @@ def test_upsert_price_rows_conflict_target_is_the_canonical_key():
             table = super().table(name)
             if name == "mandi_daily_prices":
                 original = table.upsert
-                def upsert(rows, on_conflict=None):
+                def upsert(rows, on_conflict=None, **_kw):
                     seen["on_conflict"] = on_conflict
                     return original(rows, on_conflict=on_conflict)
                 table.upsert = upsert
@@ -510,3 +523,27 @@ def test_one_row_that_keeps_timing_out_is_set_aside_and_the_rest_of_the_day_is_s
     assert result.rows_quarantined == 1
     assert client.quarantined[0]["row_data"]["mandi_id"] == 999
     assert client.quarantined[0]["error_code"] == "57014"
+
+
+def test_upsert_price_rows_skips_rows_flagged_unchanged():
+    from farmuncle_pipeline.core.price_writer import UNCHANGED
+
+    client = _FakeUpsertClient()
+    fresh = {**_price_row(mandi_id=1), "modal_price": 10, "min_price": 9, "max_price": 11}
+    same = {**_price_row(mandi_id=2), "modal_price": 10, "min_price": 9, "max_price": 11, UNCHANGED: True}
+    result = upsert_price_rows(client, [fresh, same], 500)
+    assert [r["mandi_id"] for r in client.upserted_rows] == [1]
+    assert (result.rows_upserted, result.rows_unchanged) == (1, 1)
+    assert all(UNCHANGED not in r for r in client.upserted_rows)
+
+
+def test_capture_collects_written_and_unchanged_rows_only_while_open():
+    from farmuncle_pipeline.core.price_writer import UNCHANGED, capture_written_rows
+
+    fresh = {**_price_row(mandi_id=1), "modal_price": 10, "min_price": 9, "max_price": 11}
+    same = {**_price_row(mandi_id=2), "modal_price": 10, "min_price": 9, "max_price": 11, UNCHANGED: True}
+    with capture_written_rows() as rows:
+        upsert_price_rows(_FakeUpsertClient(), [fresh, same], 500)
+    assert sorted(r["mandi_id"] for r in rows) == [1, 2] and all(UNCHANGED not in r for r in rows)
+    upsert_price_rows(_FakeUpsertClient(), [fresh], 500)
+    assert len(rows) == 2  # nothing is collected once the block has closed

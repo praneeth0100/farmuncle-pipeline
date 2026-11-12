@@ -84,7 +84,7 @@ class _RealUpsertSemanticsTable:
         assert name == "mandi_daily_prices"
         return self
 
-    def upsert(self, rows, on_conflict=None):
+    def upsert(self, rows, on_conflict=None, **_kw):
         assert on_conflict == "mandi_id,crop_id,variety_id,grade_id,price_date"
         self._pending = rows
         return self

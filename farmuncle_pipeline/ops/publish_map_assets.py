@@ -13,6 +13,7 @@ import argparse
 import concurrent.futures as cf
 import math
 import pathlib
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -44,14 +45,21 @@ def jobs(maxzoom: int) -> list[tuple[str, str, str]]:
     return out
 
 
-def fetch(url: str) -> bytes | None:
-    try:
-        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "AgroUncle map assets"}), timeout=60) as r:
-            return r.read()
-    except urllib.error.HTTPError as exc:
-        if exc.code in (403, 404):  # a font range nobody uses, or a tile past the data: nothing to copy
-            return None
-        raise
+def fetch(url: str, tries: int = 5) -> bytes | None:
+    for attempt in range(tries):
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "AgroUncle map assets"}), timeout=60) as r:
+                return r.read()
+        except urllib.error.HTTPError as exc:
+            if exc.code in (403, 404):  # a font range nobody uses, or a tile past the data: nothing to copy
+                return None
+            if exc.code < 500 or attempt == tries - 1:
+                raise
+        except (urllib.error.URLError, TimeoutError):
+            if attempt == tries - 1:
+                raise
+        time.sleep(2 ** attempt)  # the AWS bucket answers "503 Slow Down" under load: back off and try again
+    return None
 
 
 def main() -> None:
@@ -72,7 +80,7 @@ def main() -> None:
         store._client.put_object(Bucket=store.bucket, Key=key, Body=data, ContentType=kind, CacheControl=FOREVER)
         return True
 
-    with cf.ThreadPoolExecutor(32) as pool:
+    with cf.ThreadPoolExecutor(8) as pool:
         done = sum(pool.map(copy, todo))
     print(f"[map] copied {done}, skipped {len(todo) - done} (not served at the source)")
 

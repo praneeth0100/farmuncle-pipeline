@@ -1,0 +1,36 @@
+name: publish_map_assets
+
+# By hand: copy the app map's fonts and India's terrain tiles into R2 (map/), and publish the app's map style.
+# Re-runnable; files already in R2 are skipped. See farmuncle_pipeline/ops/publish_map_assets.py.
+on:
+  workflow_dispatch:
+    inputs:
+      maxzoom:
+        description: "Deepest terrain zoom to copy (each level is ~4x the tiles)"
+        required: true
+        default: "10"
+      style:
+        description: "Style file in the repo to publish (map/<name>.json)"
+        required: true
+        default: "map/style-v1.json"
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Copy fonts and terrain, publish the style
+        env:
+          MANDI_R2_ACCOUNT_ID: ${{ secrets.MANDI_R2_ACCOUNT_ID }}
+          MANDI_R2_ACCESS_KEY_ID: ${{ secrets.MANDI_R2_ACCESS_KEY_ID }}
+          MANDI_R2_SECRET_ACCESS_KEY: ${{ secrets.MANDI_R2_SECRET_ACCESS_KEY }}
+          MANDI_R2_BUCKET: ${{ secrets.MANDI_R2_BUCKET }}
+        run: python -m farmuncle_pipeline.ops.publish_map_assets --maxzoom "${{ github.event.inputs.maxzoom }}" --style "${{ github.event.inputs.style }}"

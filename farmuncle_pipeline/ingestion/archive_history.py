@@ -12,6 +12,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from farmuncle_pipeline.archive.catalog import export_catalog
 from farmuncle_pipeline.archive.export import archive_day
+from farmuncle_pipeline.core.price_writer import capture_written_rows
 from farmuncle_pipeline.archive.history import DEFAULT_OLDEST, run_backward
 from farmuncle_pipeline.archive.state import SupabaseArchiveState
 from farmuncle_pipeline.archive.store import R2Store
@@ -41,12 +42,22 @@ def main() -> None:
     store.selfcheck()
     db = ctx.supabase
 
+    written: dict = {}
+
+    def ingest(d):
+        # A second pull of the same day replaces the first capture; a row only the first pull wrote makes the count check
+        # in archive_day fail, and the day is then read back in full.
+        with capture_written_rows() as rows:
+            result = ingest_resource2_for_date(ctx, target_date=d, job_name=JOB_NAME)
+        written[d] = rows
+        return result
+
     done = run_backward(
         today=datetime.now(_IST).date(),
         oldest=date.fromisoformat(args.oldest),
         state=SupabaseArchiveState(db),
-        ingest_day=lambda d: ingest_resource2_for_date(ctx, target_date=d, job_name=JOB_NAME),
-        archive_day=lambda d: archive_day(db, store, d),
+        ingest_day=ingest,
+        archive_day=lambda d: archive_day(db, store, d, written=written.pop(d, None)),
         delete_window=lambda s, e: db.rpc("delete_price_window", {"p_start": s.isoformat(), "p_end": e.isoformat()}).execute(),
         # After the refresh the rest of the window must read the new lists, not the ones loaded at the start.
         refresh_reference=lambda: (db.rpc("refresh_price_reference").execute(), forget_reference(db)),

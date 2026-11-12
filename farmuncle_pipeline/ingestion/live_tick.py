@@ -100,6 +100,7 @@ Provenance — what was reused from the v1 reference scripts and why:
 
 from __future__ import annotations
 
+import os
 import sys
 
 import time
@@ -501,6 +502,7 @@ def run_live_tick(ctx) -> bool | None:
             resource=Resource.RESOURCE_1,
         )
         rows_quarantined = upsert_result.rows_quarantined
+        rows_written = upsert_result.rows_upserted
         flood = quarantine_flood(rows=len(price_rows) + rows_quarantined, quarantined=rows_quarantined)
         if flood:
             alert_quarantine_flood(
@@ -564,8 +566,13 @@ def run_live_tick(ctx) -> bool | None:
         # live_tick, but only when rows actually changed — an empty
         # tick (nothing new since the last run) has nothing to
         # invalidate. Non-fatal on failure; see price_cache.py.
-        if rows_processed > 0:
+        if rows_written > 0:
             refresh_price_cache(supabase, caller="live_tick")
+        # The workflow starts publish_live only when prices changed: re-publishing an unchanged day re-reads it all.
+        if os.environ.get("GITHUB_OUTPUT"):
+            with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+                out.write(f"rows_written={rows_written}\n")
+        print(f"[live_tick] {rows_written} row(s) written, {upsert_result.rows_unchanged} already stored unchanged")
         return feed_down
 
     except Exception as exc:

@@ -123,7 +123,14 @@ def _archived_rows(store, day: date) -> int | None:
         return None
 
 
-def archive_day(supabase, store, day: date) -> DayArchive:
+def _day_count(supabase, day: date) -> int | None:
+    try:
+        return supabase.table("mandi_daily_prices").select("id", count="exact", head=True).eq("price_date", day.isoformat()).execute().count
+    except Exception:
+        return None
+
+
+def archive_day(supabase, store, day: date, written: list[dict] | None = None) -> DayArchive:
     """Upload the day's Parquet and a manifest; raise ArchiveError unless the stored size matches.
 
     Never replaces a day R2 already holds with fewer rows: a day left with a few hundred rows by a failed pull
@@ -132,7 +139,8 @@ def archive_day(supabase, store, day: date) -> DayArchive:
     The day's quarantined rows go to R2 too, so deleting the window never loses a doubtful record.
     """
     quarantined = _archive_quarantine(supabase, store, day)
-    rows = fetch_day_rows(supabase, day)
+    # The rows this run just wrote, when the warehouse holds exactly that many for the day; otherwise read the day back.
+    rows = written if written is not None and written and _day_count(supabase, day) == len(written) else fetch_day_rows(supabase, day)
     if not rows:
         return DayArchive(day, 0, 0, None, quarantined)
     data = rows_to_parquet(rows)

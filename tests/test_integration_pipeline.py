@@ -74,7 +74,7 @@ class _FakeUpsertTable:
         assert name == "mandi_daily_prices"
         return self
 
-    def upsert(self, rows, on_conflict=None):
+    def upsert(self, rows, on_conflict=None, **_kw):
         self._pending = rows
         return self
 

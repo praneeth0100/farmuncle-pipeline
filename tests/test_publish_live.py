@@ -23,8 +23,11 @@ VARIETIES = [{"id": 100, "crop_id": 10, "name": "Red", "status": "ACTIVE", "merg
 GRADES = [{"id": 5, "name": "FAQ"}]
 
 
+_ids = __import__("itertools").count(1)
+
+
 def price(mid, cid, d, modal, vid=None, gid=5):
-    return {"id": 0, "mandi_id": mid, "crop_id": cid, "variety_id": vid, "grade_id": gid, "price_date": d,
+    return {"id": next(_ids), "mandi_id": mid, "crop_id": cid, "variety_id": vid, "grade_id": gid, "price_date": d,
             "modal_price": modal, "min_price": modal - 3, "max_price": modal + 3, "created_at": f"{d}T05:30:00+00:00"}
 
 
@@ -110,6 +113,14 @@ class Query:
 
     def range(self, start, end):
         self.rows = self.rows[start:end + 1]
+        return self
+
+    def gt(self, col, value):
+        self.rows = [r for r in self.rows if r[col] > value]
+        return self
+
+    def limit(self, n):
+        self.rows = self.rows[:n]
         return self
 
     def execute(self):
@@ -291,3 +302,32 @@ def test_files_uploaded_before_the_charset_fix_are_uploaded_again():
     import hashlib
     old = hashlib.sha256(json.dumps({"a": 1}, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:16]
     assert pl.content_hash({"a": 1, "updated_at": "x"}) != old
+
+
+def test_merge_window_replaces_changed_rows_and_drops_days_that_left():
+    from datetime import date
+
+    from farmuncle_pipeline.ingestion.publish_live import merge_window
+
+    old = [{"id": 1, "price_date": "2026-11-08", "modal_price": 10}, {"id": 2, "price_date": "2026-11-10", "modal_price": 20}]
+    changed = [{"id": 2, "price_date": "2026-11-10", "modal_price": 21}, {"id": 3, "price_date": "2026-11-12", "modal_price": 30}]
+    rows = merge_window(old, changed, date(2026, 11, 9))
+    assert sorted((r["id"], r["modal_price"]) for r in rows) == [(2, 21), (3, 30)]
+
+
+def test_window_data_downloads_only_changed_rows_after_the_first_run(monkeypatch):
+    from datetime import date, datetime, timezone
+
+    from farmuncle_pipeline.ingestion import publish_live as pl
+
+    calls = []
+    store = type("S", (), {"data": {}, "put": lambda self, k, b, t=None: self.data.__setitem__(k, b),
+                           "get": lambda self, k: self.data[k]})()
+    rows = [{"id": 1, "mandi_id": 1, "crop_id": 1, "variety_id": None, "grade_id": None, "price_date": "2026-11-12",
+             "modal_price": 10, "updated_at": "2026-11-12T05:00:00+00:00"}]
+    monkeypatch.setattr(pl, "_fetch_prices", lambda db, since, changed_since=None: calls.append(changed_since) or list(rows))
+    monkeypatch.setattr(pl, "_fetch", lambda db, t, cols: [{"id": 1}])
+    now = datetime(2026, 11, 12, 6, tzinfo=timezone.utc)
+    pl.window_data(None, store, date(2026, 11, 9), now)
+    pl.window_data(None, store, date(2026, 11, 9), now)
+    assert calls == [None, "2026-11-12T05:00:00+00:00"]  # full read once, then only rows changed since the watermark

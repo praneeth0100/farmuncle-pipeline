@@ -58,7 +58,11 @@ Explicitly out of scope for this file:
 from __future__ import annotations
 
 import time
+from contextlib import contextmanager
+from datetime import datetime, timezone
 from dataclasses import dataclass
+
+from postgrest import ReturnMethod
 
 from farmuncle_pipeline.config import ConfigError, Resource, Source
 from farmuncle_pipeline.core.batch_lifecycle import insert_data_quality_issue
@@ -118,10 +122,14 @@ _TRANSIENT_ATTEMPTS = 3
 
 
 def _upsert(table, rows: list[dict]):
+    # updated_at marks every write, so publish_live can download only what changed since its last run
+    stamp = datetime.now(timezone.utc).isoformat()
+    rows = [{**row, "updated_at": stamp} for row in rows]
     """Upsert, retrying transient failures (timeouts, resets); a row-level data error is raised at once."""
     for attempt in range(1, _TRANSIENT_ATTEMPTS + 1):
         try:
-            return table.upsert(rows, on_conflict=_ON_CONFLICT).execute()
+            # minimal: PostgREST would otherwise send every written row back, and that echo is billed egress
+            return table.upsert(rows, on_conflict=_ON_CONFLICT, returning=ReturnMethod.minimal).execute()
         except Exception as exc:
             if _is_row_level_error(exc) or attempt == _TRANSIENT_ATTEMPTS:
                 raise
@@ -138,6 +146,7 @@ class UpsertResult:
     except surface the count in their own summary/error_summary."""
     rows_upserted: int
     rows_quarantined: int
+    rows_unchanged: int = 0  # already stored exactly so; not written again
 
 # One price per (canonical mandi, crop, variety, grade, day): the unique key uq_prices_canonical_key.
 # Text spellings and the source market a row came from are deliberately NOT part of it, otherwise the
@@ -148,6 +157,32 @@ _PAGE = 1000  # PostgREST returns at most this many rows per request
 
 def _canonical_key(row: dict) -> tuple:
     return (row["mandi_id"], row["crop_id"], row["variety_id"], row["grade_id"], row["price_date"])
+
+
+UNCHANGED = "_unchanged"  # in-memory flag only; never sent to the database
+
+# Rows the warehouse holds after upsert_price_rows, collected while capture_written_rows() is open: the archive builds a
+# day's R2 file from them instead of downloading the day back (Supabase bills that download as egress).
+_captured: list[dict] | None = None
+
+
+@contextmanager
+def capture_written_rows():
+    global _captured
+    _captured = rows = []
+    try:
+        yield rows
+    finally:
+        _captured = None
+
+
+def _keep(rows) -> None:
+    if _captured is not None:
+        _captured.extend({k: v for k, v in row.items() if k != UNCHANGED} for row in rows)
+
+
+def _prices(row: dict) -> tuple:
+    return tuple(None if row.get(c) is None else round(float(row[c]), 2) for c in ("modal_price", "min_price", "max_price"))
 
 
 def _is_own_source(row: dict) -> bool:
@@ -213,7 +248,7 @@ def filter_rows_by_precedence(client, rows: list[dict], new_source: Source) -> t
             while True:
                 page = (
                     client.table("mandi_daily_prices")
-                    .select("id,mandi_id,crop_id,variety_id,grade_id,price_date,source,source_mandi_id")
+                    .select("id,mandi_id,crop_id,variety_id,grade_id,price_date,source,source_mandi_id,modal_price,min_price,max_price")
                     .eq("price_date", day)
                     .gt("id", last_id)
                     .order("id")
@@ -234,6 +269,7 @@ def filter_rows_by_precedence(client, rows: list[dict], new_source: Source) -> t
 
     existing_rank: dict[tuple, int] = {}
     existing_own: dict[tuple, bool] = {}
+    stored = {(*_canonical_key(e), e.get("source_mandi_id"), e["source"]): _prices(e) for e in existing_rows}
     for existing in existing_rows:
         key = _canonical_key(existing)
         existing_rank[key] = max(existing_rank.get(key, 0), _SOURCE_RANK.get(existing["source"], 0))
@@ -250,6 +286,9 @@ def filter_rows_by_precedence(client, rows: list[dict], new_source: Source) -> t
         ):
             skipped += 1
             continue
+        # Already stored exactly as it is: flag it so upsert_price_rows skips the write (hourly runs re-read the whole day).
+        if stored.get((*key, row.get("source_mandi_id"), new_source.value)) == _prices(row):
+            row = {**row, UNCHANGED: True}
         kept.append(row)
 
     return kept, skipped
@@ -354,7 +393,10 @@ def upsert_price_rows(
         if kept_row is not None and _is_own_source(kept_row) and not _is_own_source(row):
             continue
         deduped[key] = row
-    unique_rows = list(deduped.values())
+    # Rows already stored unchanged are counted as handled but not written again.
+    unique_rows = [row for row in deduped.values() if not row.get(UNCHANGED)]
+    unchanged = len(deduped) - len(unique_rows)
+    _keep(row for row in deduped.values() if row.get(UNCHANGED))
 
     table = client.table("mandi_daily_prices")
     total_upserted = 0
@@ -370,6 +412,7 @@ def upsert_price_rows(
             # constraint matching the ON CONFLICT specification".
             _upsert(table, chunk)
             total_upserted += len(chunk)
+            _keep(chunk)
             continue
         except Exception as exc:
             # A timeout on the chunk does not say which row is at fault, so it is isolated row by row
@@ -393,6 +436,7 @@ def upsert_price_rows(
             try:
                 _upsert(table, [row])
                 total_upserted += 1
+                _keep([row])
             except Exception as row_exc:
                 # Only this row is set aside, whatever the error: a row that still fails after the
                 # retries is kept in quarantine (archived with the day), and the rest of the day goes on.
@@ -406,4 +450,4 @@ def upsert_price_rows(
                 )
                 total_quarantined += 1
 
-    return UpsertResult(rows_upserted=total_upserted, rows_quarantined=total_quarantined)
+    return UpsertResult(rows_upserted=total_upserted, rows_quarantined=total_quarantined, rows_unchanged=unchanged)

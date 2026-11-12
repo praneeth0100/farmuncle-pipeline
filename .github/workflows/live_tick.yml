@@ -23,6 +23,8 @@ jobs:
       group: live-tick
       cancel-in-progress: false
     runs-on: ubuntu-latest
+    outputs:
+      rows_written: ${{ steps.tick.outputs.rows_written }}
     timeout-minutes: 30 # §24 target is <5 min; generous margin before treating it as hung
     steps:
       - uses: actions/checkout@v4
@@ -43,13 +45,15 @@ jobs:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        id: tick
         run: python -m farmuncle_pipeline.ingestion.live_tick
 
   # The workflow itself only "completes" when the chain job ends an hour later, so workflow_run would publish
   # an hour late. Start the publisher straight after the pull instead.
   publish:
     needs: run
-    if: success()
+    # Only when prices changed: publishing an unchanged day re-downloads all of it (Supabase egress quota).
+    if: success() && needs.run.outputs.rows_written != '0'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

@@ -1,0 +1,50 @@
+name: requeue_archive_days
+
+# One-off repair (#42): list thin archived days as FAILED with no tries used, so archive_history pulls them again
+# and replaces the R2 file (it never replaces a file with fewer rows). Only days with under `max_rows` rows are touched.
+on:
+  workflow_dispatch:
+    inputs:
+      start:
+        description: "First day, YYYY-MM-DD"
+        required: true
+      end:
+        description: "Last day, YYYY-MM-DD"
+        required: true
+      max_rows:
+        description: "Only days archived with fewer rows than this"
+        required: true
+        default: "5000"
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Requeue
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          START: ${{ github.event.inputs.start }}
+          END: ${{ github.event.inputs.end }}
+          MAX_ROWS: ${{ github.event.inputs.max_rows }}
+        shell: python
+        run: |
+          import os
+          from datetime import date
+          from supabase import create_client
+          start, end, cap = date.fromisoformat(os.environ["START"]), date.fromisoformat(os.environ["END"]), int(os.environ["MAX_ROWS"])
+          db = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_KEY"])
+          rows = (db.table("archive_days").update({"status": "FAILED", "attempts": 0, "last_error": "requeued for a fresh pull (#42)"})
+                  .gte("day", start.isoformat()).lte("day", end.isoformat()).lt("rows_sent", cap).execute().data or [])
+          for r in sorted(rows, key=lambda r: r["day"]):
+              print(r["day"], "rows_sent", r["rows_sent"], "->", r["status"])
+          print(f"requeued {len(rows)} days")

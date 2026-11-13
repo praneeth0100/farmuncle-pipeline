@@ -302,6 +302,17 @@ def archive_rows(store, today: date) -> list[dict]:
 HASH_SALT = "utf8-charset"  # changing it re-uploads every file once (done when JSON started carrying charset=utf-8)
 
 
+def crop_states(files: dict) -> dict:
+    """live/crop_states.json: for each crop, the states whose file has rows. Screen 2's All states asks only these;
+    asking every state got R2's 27 KB "not found" page for each state without a file (5-8 per crop)."""
+    sellers = defaultdict(list)
+    for key, payload in files.items():
+        if key.startswith("live/crop/") and payload.get("rows"):
+            _, _, cslug, fname = key.split("/")
+            sellers[cslug].append(fname[:-5])
+    return {"v": 1, "crops": {crop: sorted(states) for crop, states in sorted(sellers.items())}}
+
+
 def content_hash(payload: dict) -> str:
     body = {k: v for k, v in payload.items() if k != "updated_at"}
     return hashlib.sha256((HASH_SALT + json.dumps(body, sort_keys=True, separators=(",", ":"))).encode()).hexdigest()[:16]
@@ -398,6 +409,7 @@ def publish(db, store, now: datetime | None = None, *, all_homes: bool = False, 
         elif key.startswith("live/crop/") and key not in files:
             _, _, cslug, fname = key.split("/")
             files[key] = {"v": 1, "crop_id": cslug, "state": fname[:-5], "date": today.isoformat(), "updated_at": stamp, "rows": []}
+    files["live/crop_states.json"] = crop_states(files)
     changed = {k: p for k, p in files.items() if hashes.get(k) != content_hash(p)}
     encoded = {k: _encode(p) for k, p in changed.items()}
     for k, data in encoded.items():

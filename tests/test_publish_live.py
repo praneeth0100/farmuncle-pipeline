@@ -139,13 +139,14 @@ class DB:
 def test_publish_writes_changed_only_and_manifest():
     store = Store()
     first = pl.publish(DB(PRICES), store, NOW)
-    assert first["written"] == first["files"] == 5  # onion/mh too: Pune's yesterday price stays listed
+    assert first["written"] == first["files"] == 6  # onion/mh too: Pune's yesterday price stays listed; + live/crop_states.json
     assert json.loads(store["catalog/mandis.json"])["version"] == 1
     assert [s["id"] for s in json.loads(store["catalog/states.json"])["states"]] == ["ka", "mh"]
     app = json.loads(store["catalog/app_mandis.json"])  # the onboarding mandi list, so the app stops reading it from Supabase
     assert len(app["markets"]) > 2700 and {"states", "districts", "capitals", "fetchedAt"} <= app.keys()
     assert json.loads(store["meta/manifest.json"])["live_updated_at"] == "2026-10-29T09:00:00+05:30"
     assert set(json.loads(store["meta/crop_slugs.json"])["crops"].values()) == {"onion", "tomato"}
+    assert json.loads(store["live/crop_states.json"])["crops"]["onion"] == ["ka", "mh"]
     later = datetime(2026, 10, 29, 10, 0, tzinfo=pl.IST)
     assert pl.publish(DB(PRICES), store, later)["written"] == 0  # same data an hour later
     assert json.loads(store["meta/manifest.json"])["live_updated_at"] == "2026-10-29T10:00:00+05:30"
@@ -331,3 +332,14 @@ def test_window_data_downloads_only_changed_rows_after_the_first_run(monkeypatch
     pl.window_data(None, store, date(2026, 11, 9), now)
     pl.window_data(None, store, date(2026, 11, 9), now)
     assert calls == [None, "2026-11-12T05:00:00+00:00"]  # full read once, then only rows changed since the watermark
+
+
+def test_crop_states_lists_only_states_with_rows():
+    files = {
+        "live/crop/onion/ka.json": {"rows": [{"mandi_id": "ka.x"}]},
+        "live/crop/onion/mh.json": {"rows": [{"mandi_id": "mh.y"}]},
+        "live/crop/onion/tn.json": {"rows": []},  # stale file, now empty: not a seller
+        "live/crop/tomato/ap.json": {"rows": [{"mandi_id": "ap.z"}]},
+        "live/mandi/ka.x.json": {"items": [1]},
+    }
+    assert pl.crop_states(files) == {"v": 1, "crops": {"onion": ["ka", "mh"], "tomato": ["ap"]}}

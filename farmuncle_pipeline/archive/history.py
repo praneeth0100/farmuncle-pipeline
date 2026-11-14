@@ -1,4 +1,4 @@
-"""Fill history backwards: today -> Nov 2016 (10 years) in 10-day windows.
+"""Fill history backwards: today -> 1 Jan 2018 in 10-day windows.
 
 Each window goes one day at a time: ingest the day (Resource 2) into the warehouse, export it to R2, verify it and
 delete that day, then the next. The reference stats are snapshotted once per window, after its first day is in.
@@ -16,7 +16,8 @@ from datetime import date, timedelta
 
 from farmuncle_pipeline.archive.tracker import incomplete_reason
 
-DEFAULT_OLDEST = date(2016, 11, 1)
+# Owner, 15 Nov 2026: history back to the start of 2018 is enough; the loop stops once 2018 is done (was 1 Nov 2016).
+DEFAULT_OLDEST = date(2018, 1, 1)
 OUTAGE_REDOS = 2  # a window where every day failed runs twice more; then its days are recorded FAILED and it moves on
 LIVE_DAYS = 3  # days kept in the warehouse for the app; keep equal to delete_price_window's guard
 

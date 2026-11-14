@@ -89,7 +89,8 @@ def load(con, facts_glob: str | None, warehouse_rows: list[dict], maps: dict) ->
 
 def charts(con, end: date, stamp: str):
     """Yields (key, payload) per crop+mandi with an active key, lines sorted by variety then grade.
-    days: [offset from start, modal, min, max]; weeks: [weeks from weekly_start, average modal]."""
+    days: [offset from start, modal, min, max]; weeks: [weeks from weekly_start, average modal, average min, average max]
+    (min or max null when that week had none)."""
     # The daily part starts on the 1st of the month a year back, not exactly 364 days back, so day offsets (and so a chart's
     # hash) stay the same from one day to the next: a chart is rewritten only when its own prices change, or once a month.
     start = (end - timedelta(days=364)).replace(day=1)
@@ -100,8 +101,9 @@ def charts(con, end: date, stamp: str):
         p AS (SELECT * FROM prices JOIN groups USING (crop, mandi)),
         daily AS (SELECT crop, mandi, variety, grade, list(struct_pack(d := d, p := modal, lo := mn, hi := mx) ORDER BY d) AS days
                   FROM p WHERE d >= $start GROUP BY ALL),
-        weekly AS (SELECT crop, mandi, variety, grade, list(struct_pack(w := w, a := a) ORDER BY w) AS weeks
-                   FROM (SELECT crop, mandi, variety, grade, CAST(date_trunc('week', d) AS DATE) AS w, round(avg(modal), 2) AS a
+        weekly AS (SELECT crop, mandi, variety, grade, list(struct_pack(w := w, a := a, lo := lo, hi := hi) ORDER BY w) AS weeks
+                   FROM (SELECT crop, mandi, variety, grade, CAST(date_trunc('week', d) AS DATE) AS w, round(avg(modal), 2) AS a,
+                                round(avg(mn), 2) AS lo, round(avg(mx), 2) AS hi
                          FROM p WHERE d < $start GROUP BY ALL) GROUP BY ALL)
         SELECT crop, mandi, variety, grade, days, weeks FROM daily FULL JOIN weekly USING (crop, mandi, variety, grade)
         ORDER BY crop, mandi, variety, grade""", {"end": end, "start": start, "reports": ACTIVE_REPORTS})
@@ -125,7 +127,7 @@ def _chart(group, lines, start: date, stamp: str):
         "lines": [{"variety": v, "grade": g, "days": [[(x["d"] - start).days, x["p"], x["lo"], x["hi"]] for x in days]}
                   for v, g, days, _ in lines if days],
         "weekly_start": first_week.isoformat() if first_week else None,
-        "weekly": [{"variety": v, "grade": g, "weeks": [[(x["w"] - first_week).days // 7, x["a"]] for x in weeks]}
+        "weekly": [{"variety": v, "grade": g, "weeks": [[(x["w"] - first_week).days // 7, x["a"], x["lo"], x["hi"]] for x in weeks]}
                    for v, g, _, weeks in lines if weeks]}
     return f"chart/{crop}/{mandi}.json", payload
 
@@ -146,8 +148,10 @@ def key_stats(con, end: date) -> dict:
 
 
 def _fit(key: str, payload: dict) -> bytes | None:
-    """The chart as bytes within budget: weekly history is dropped first; None when even that is too big."""
-    for candidate in (payload, {**payload, "weekly_start": None, "weekly": []}):
+    """The chart as bytes within budget: weekly min/max go first (weeks back to [week, modal]), then the weekly history;
+    None when even that is too big."""
+    modal_only = [{**w, "weeks": [x[:2] for x in w["weeks"]]} for w in payload["weekly"]]
+    for candidate in (payload, {**payload, "weekly": modal_only}, {**payload, "weekly_start": None, "weekly": []}):
         data = _encode(candidate)
         if len(gzip.compress(data)) <= CHART_BUDGET:
             return data

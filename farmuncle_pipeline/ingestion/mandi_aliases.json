@@ -1,0 +1,972 @@
+{
+ "_doc": "Same market under a retired id -> current id, applied at publish time by publish_live.apply_mandi_aliases. Evidence from the R2 archive (facts/daily, read only) on 2026-11-15: the old id is only in resource_2 and stops; the new id appears with resource_1; while both sources ran they reported the same modal price on 90%+ of shared crop-days (or: similar names, never the same day). The archive is not rewritten.",
+ "aliases": {
+  "ka.mysore.mysore_bandipalya": "ka.mysuru.mysuru",
+  "hp.solan.solan": "hp.solan.pmy_kather_solan",
+  "hp.shimla.shimla": "hp.shimla.pmy_dhalli_shimla",
+  "gj.amreli.amreli": "gj.amreli.the_agricultural_produce_amreli",
+  "ka.dharwad.hubli_amaragol": "ka.dharwad.hubballi",
+  "mh.ahmednagar.ahmednagar": "mh.ahilyanagar.ahilyanagar",
+  "jk.udhampur.udhampur": "jk.udhampur.fruit_and_vegetable_udhampur",
+  "mp.hoshangabad.hoshangabad": "mp.narmadapuram.narmadapuram",
+  "wb.hooghly.kalipur": "wb.hooghly.kalipur_arambagh_krishak_bazar",
+  "mp.indore.mhow": "mp.indore.mhow_ambedkar_nagar",
+  "kl.ernakulam.moovattupuzha": "kl.ernakulam.arwm_muvattupuzha",
+  "jk.rajouri.rajouri": "jk.rajouri.rajouri_phaliana",
+  "mh.nashik.chandvad": "mh.nashik.chandwad",
+  "mp.mandla.bichhiya": "mp.mandla.krishi_upaj_samiti_bichhiya",
+  "mp.sagar.garhakota": "mp.sagar.gadakota",
+  "ka.bijapur.bijapur": "ka.vijayapura.vijayapura",
+  "mp.jabalpur.sihora": "mp.jabalpur.sehora",
+  "ka.kolar.mulabagilu": "ka.kolar.mulbagal",
+  "mh.ahmednagar.om_chaitanya_multistate_agro_purpose_coop_society": "mh.ahilyanagar.omchatinya_multi_state_agro_purpose_co_op_society_dist_ahilyanagar",
+  "tr.unokoti.masmara": "tr.unokoti.machmara",
+  "up.badaun.visoli": "up.badaun.bisoli",
+  "an.north_and_middle_andaman.diglipur": "an.north_and_middle_andaman.diglipur_vegetable_subhashgram",
+  "cg.kanker.kanker": "cg.kanker.krishi_upaj_samiti_kanker",
+  "mp.hoshangabad.babai": "mp.narmadapuram.babai_makhan_nagar",
+  "ap.cuddapah.cuddapah": "ap.ysr_kadapa.kadapa",
+  "ka.mysore.piriya_pattana": "ka.mysuru.periyapatna",
+  "mh.buldhana.bsk_krishi_bazar_private_ltd": "mh.buldhana.bsk_krishi_bazar_private_limited_mehkar_dist_buldhana",
+  "ka.bijapur.sindagi_indi": "ka.vijayapura.indi",
+  "mp.shajapur.akodia": "mp.shajapur.akodiya",
+  "mh.amarawati.shetkari_khushi_bazar": "mh.amarawati.shetkari_krushi_utapanna_bazar_roshankheda_tal_varud_dist_amravati",
+  "ka.chikmagalur.moodigere": "ka.chikkamagaluru.mudigere",
+  "an.north_and_middle_andaman.mayabandar": "an.north_and_middle_andaman.mayabander_vegetable",
+  "mh.nashik.shivsiddha_govind_producer_company_limited_sanchal": "mh.nashik.shivsiddha_govind_producer_company_ltd_sanchalit_khajgi_krush_utpann_bajar_samati_nashik",
+  "mh.nashik.agriculture_produce_comitee_chandwad": "mh.nashik.chandwad",
+  "mh.sholapur.laxmi_sopan_agriculture_produce_marketing_co_ltd": "mh.solapur.laxmi_sopan_agriculture_produce_marketing_co_ltd_barshi_dist_solapur",
+  "tg.hanmakonda.excise_colony_rbz_under_warangal": "tg.hanumakonda.excise_colony_rbz",
+  "gj.surat.nizar_pumkitalov": "gj.surat.nizar_rumkitalav",
+  "mh.yavatmal.jagdamba_agrocare": "mh.yavatmal.jagdamba_agrocare_pvt_ltd_pandharkawada_dist_yeotmal",
+  "ap.nellore.atmakur_sps": "ap.spsr_nellore.atmakur_spsr_nellore_district",
+  "mh.sholapur.perfect_krishi_yard_pvt_ltd": "mh.solapur.perfect_krushi_yard_tal_madha_dist_solapur",
+  "mh.nanded.shetkari_khajgi_bajar": "mh.nanded.shetkari_khajgi_bajar_parisar_tal_bhokar_dist_nanded",
+  "mh.yavatmal.kisan_yard_tal_pusad_dist_yeotmal": "mh.yavatmal.kisan_yard"
+ },
+ "evidence": [
+  {
+   "old": "ka.mysore.mysore_bandipalya",
+   "new": "ka.mysuru.mysuru",
+   "old_name": "Mysore (Bandipalya) APMC",
+   "new_name": "Mysuru APMC",
+   "district": "Mysuru",
+   "why": "same-day same-price handover",
+   "old_range": "2018-11-20..2026-05-26",
+   "old_days": 2388,
+   "old_rows": 83127,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2026-04-01..2026-11-12",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 56,
+   "shared_crop_days": 2053,
+   "same_price": 2053
+  },
+  {
+   "old": "hp.solan.solan",
+   "new": "hp.solan.pmy_kather_solan",
+   "old_name": "Solan",
+   "new_name": "PMY Kather Solan",
+   "district": "Solan",
+   "why": "same-day same-price handover",
+   "old_range": "2018-11-20..2025-11-04",
+   "old_days": 1664,
+   "old_rows": 47908,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2025-11-01..2026-11-13",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 4,
+   "shared_crop_days": 88,
+   "same_price": 88
+  },
+  {
+   "old": "hp.shimla.shimla",
+   "new": "hp.shimla.pmy_dhalli_shimla",
+   "old_name": "Shimla",
+   "new_name": "PMY Dhalli Shimla",
+   "district": "Shimla",
+   "why": "same-day same-price handover",
+   "old_range": "2018-12-01..2025-11-03",
+   "old_days": 1790,
+   "old_rows": 37259,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2025-11-03..2026-11-12",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 1,
+   "shared_crop_days": 32,
+   "same_price": 32
+  },
+  {
+   "old": "gj.amreli.amreli",
+   "new": "gj.amreli.the_agricultural_produce_amreli",
+   "old_name": "Amreli APMC",
+   "new_name": "The Agricultural Produce Market Committee-Amreli",
+   "district": "Amreli",
+   "why": "same-day same-price handover",
+   "old_range": "2018-11-20..2026-07-02",
+   "old_days": 1871,
+   "old_rows": 33825,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2026-06-01..2026-11-04",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 23,
+   "shared_crop_days": 500,
+   "same_price": 500
+  },
+  {
+   "old": "ka.dharwad.hubli_amaragol",
+   "new": "ka.dharwad.hubballi",
+   "old_name": "Hubli (Amaragol) APMC",
+   "new_name": "APMC Hubballi",
+   "district": "Dharwad",
+   "why": "same-day same-price handover",
+   "old_range": "2018-11-20..2026-05-27",
+   "old_days": 2121,
+   "old_rows": 28107,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2026-04-01..2026-11-13",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 44,
+   "shared_crop_days": 598,
+   "same_price": 598
+  },
+  {
+   "old": "mh.ahmednagar.ahmednagar",
+   "new": "mh.ahilyanagar.ahilyanagar",
+   "old_name": "Ahmednagar APMC",
+   "new_name": "Ahilyanagar APMC",
+   "district": "Ahilyanagar",
+   "why": "same-day same-price handover",
+   "old_range": "2018-11-20..2026-05-12",
+   "old_days": 1976,
+   "old_rows": 27722,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2026-04-01..2026-11-11",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 25,
+   "shared_crop_days": 544,
+   "same_price": 544
+  },
+  {
+   "old": "jk.udhampur.udhampur",
+   "new": "jk.udhampur.fruit_and_vegetable_udhampur",
+   "old_name": "Udhampur (F&V)",
+   "new_name": "Fruit and Vegetable Market Udhampur",
+   "district": "Udhampur",
+   "why": "same-day same-price handover",
+   "old_range": "2018-11-20..2026-07-14",
+   "old_days": 1547,
+   "old_rows": 26004,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2026-06-02..2026-11-13",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 22,
+   "shared_crop_days": 322,
+   "same_price": 322
+  },
+  {
+   "old": "mp.hoshangabad.hoshangabad",
+   "new": "mp.narmadapuram.narmadapuram",
+   "old_name": "Hoshangabad(F&V) APMC",
+   "new_name": "Narmadapuram (F&V) APMC",
+   "district": "Narmadapuram",
+   "why": "same-day same-price handover",
+   "old_range": "2018-11-20..2026-09-08",
+   "old_days": 1903,
+   "old_rows": 25084,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2026-08-02..2026-11-13",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 23,
+   "shared_crop_days": 418,
+   "same_price": 418
+  },
+  {
+   "old": "wb.hooghly.kalipur",
+   "new": "wb.hooghly.kalipur_arambagh_krishak_bazar",
+   "old_name": "Kalipur APMC",
+   "new_name": "Kalipur(Arambagh Krishak Bazar)APMC",
+   "district": "Hooghly",
+   "why": "same-day same-price handover",
+   "old_range": "2018-11-20..2026-09-08",
+   "old_days": 2824,
+   "old_rows": 23516,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2026-08-01..2026-11-13",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 33,
+   "shared_crop_days": 452,
+   "same_price": 452
+  },
+  {
+   "old": "mp.indore.mhow",
+   "new": "mp.indore.mhow_ambedkar_nagar",
+   "old_name": "Mhow APMC",
+   "new_name": "Mhow (Ambedkar Nagar) (F&V) APMC",
+   "district": "Indore",
+   "why": "same-day same-price handover",
+   "old_range": "2018-11-20..2026-09-08",
+   "old_days": 2317,
+   "old_rows": 23422,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2026-08-01..2026-11-13",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 24,
+   "shared_crop_days": 155,
+   "same_price": 154
+  },
+  {
+   "old": "kl.ernakulam.moovattupuzha",
+   "new": "kl.ernakulam.arwm_muvattupuzha",
+   "old_name": "Moovattupuzha APMC",
+   "new_name": "ARWM Muvattupuzha",
+   "district": "Ernakulam",
+   "why": "same-day same-price handover",
+   "old_range": "2018-11-20..2026-05-21",
+   "old_days": 1403,
+   "old_rows": 22237,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2026-04-02..2026-11-12",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 40,
+   "shared_crop_days": 66,
+   "same_price": 66
+  },
+  {
+   "old": "jk.rajouri.rajouri",
+   "new": "jk.rajouri.rajouri_phaliana",
+   "old_name": "Rajouri (F&V) APMC",
+   "new_name": "Rajouri (Phaliana) (F&V)",
+   "district": "Rajouri",
+   "why": "same-day same-price handover",
+   "old_range": "2018-11-20..2026-05-21",
+   "old_days": 1103,
+   "old_rows": 19626,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2026-04-07..2026-11-13",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 42,
+   "shared_crop_days": 534,
+   "same_price": 534
+  },
+  {
+   "old": "mh.nashik.chandvad",
+   "new": "mh.nashik.chandwad",
+   "old_name": "Chandvad APMC",
+   "new_name": "APMC Chandwad",
+   "district": "Nashik",
+   "why": "clean rename",
+   "old_range": "2018-11-21..2026-06-24",
+   "old_days": 2250,
+   "old_rows": 10245,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2026-08-03..2026-11-13",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 0,
+   "shared_crop_days": 0,
+   "same_price": 0
+  },
+  {
+   "old": "mp.mandla.bichhiya",
+   "new": "mp.mandla.krishi_upaj_samiti_bichhiya",
+   "old_name": "Bichhiya APMC",
+   "new_name": "Krishi Upaj Mandi Samiti Bichhiya",
+   "district": "Mandla",
+   "why": "same-day same-price handover",
+   "old_range": "2018-11-20..2026-05-13",
+   "old_days": 2126,
+   "old_rows": 9811,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2026-04-01..2026-11-13",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 43,
+   "shared_crop_days": 367,
+   "same_price": 366
+  },
+  {
+   "old": "mp.sagar.garhakota",
+   "new": "mp.sagar.gadakota",
+   "old_name": "Garhakota APMC",
+   "new_name": "Gadakota APMC",
+   "district": "Sagar",
+   "why": "same-day same-price handover",
+   "old_range": "2018-11-20..2026-09-08",
+   "old_days": 1926,
+   "old_rows": 9508,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2025-10-07..2026-11-13",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 24,
+   "shared_crop_days": 183,
+   "same_price": 182
+  },
+  {
+   "old": "ka.bijapur.bijapur",
+   "new": "ka.vijayapura.vijayapura",
+   "old_name": "Bijapur APMC",
+   "new_name": "Vijayapura APMC",
+   "district": "Vijayapura",
+   "why": "same-day same-price handover",
+   "old_range": "2018-11-20..2026-05-27",
+   "old_days": 1838,
+   "old_rows": 8744,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2026-04-01..2026-11-13",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 57,
+   "shared_crop_days": 614,
+   "same_price": 614
+  },
+  {
+   "old": "mp.jabalpur.sihora",
+   "new": "mp.jabalpur.sehora",
+   "old_name": "Sihora APMC",
+   "new_name": "Sehora APMC",
+   "district": "Jabalpur",
+   "why": "same-day same-price handover",
+   "old_range": "2018-11-26..2026-09-08",
+   "old_days": 1109,
+   "old_rows": 5170,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2023-12-21..2026-11-13",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 26,
+   "shared_crop_days": 134,
+   "same_price": 129
+  },
+  {
+   "old": "ka.kolar.mulabagilu",
+   "new": "ka.kolar.mulbagal",
+   "old_name": "Mulabagilu APMC",
+   "new_name": "Mulbagal APMC",
+   "district": "Kolar",
+   "why": "same-day same-price handover",
+   "old_range": "2018-11-20..2026-05-27",
+   "old_days": 2205,
+   "old_rows": 3847,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2026-04-01..2026-11-13",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 52,
+   "shared_crop_days": 77,
+   "same_price": 77
+  },
+  {
+   "old": "mh.ahmednagar.om_chaitanya_multistate_agro_purpose_coop_society",
+   "new": "mh.ahilyanagar.omchatinya_multi_state_agro_purpose_co_op_society_dist_ahilyanagar",
+   "old_name": "Om Chaitanya Multistate Agro Purpose CoOp Society  APMC",
+   "new_name": "Omchatinya Multi State Agro Purpose Co-Op Society, Dist Ahilyanagar",
+   "district": "Ahilyanagar",
+   "why": "same-day same-price handover",
+   "old_range": "2023-07-05..2026-05-13",
+   "old_days": 623,
+   "old_rows": 3536,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2026-04-01..2026-11-13",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 36,
+   "shared_crop_days": 131,
+   "same_price": 131
+  },
+  {
+   "old": "tr.unokoti.masmara",
+   "new": "tr.unokoti.machmara",
+   "old_name": "Masmara",
+   "new_name": "Machmara",
+   "district": "Unokoti",
+   "why": "same-day same-price handover",
+   "old_range": "2020-05-01..2025-11-05",
+   "old_days": 448,
+   "old_rows": 3463,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2025-11-01..2026-11-12",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 4,
+   "shared_crop_days": 20,
+   "same_price": 20
+  },
+  {
+   "old": "up.badaun.visoli",
+   "new": "up.badaun.bisoli",
+   "old_name": "Visoli",
+   "new_name": "Bisoli APMC",
+   "district": "Badaun",
+   "why": "same-day same-price handover",
+   "old_range": "2018-11-20..2025-11-04",
+   "old_days": 1641,
+   "old_rows": 3311,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2025-11-01..2026-11-13",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 4,
+   "shared_crop_days": 13,
+   "same_price": 13
+  },
+  {
+   "old": "an.north_and_middle_andaman.diglipur",
+   "new": "an.north_and_middle_andaman.diglipur_vegetable_subhashgram",
+   "old_name": "Diglipur APMC",
+   "new_name": "Diglipur Vegetable Market (Subhashgram)",
+   "district": "North and Middle Andaman",
+   "why": "same-day same-price handover",
+   "old_range": "2019-03-02..2026-06-16",
+   "old_days": 108,
+   "old_rows": 2830,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2026-05-02..2026-11-12",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 36,
+   "shared_crop_days": 971,
+   "same_price": 971
+  },
+  {
+   "old": "cg.kanker.kanker",
+   "new": "cg.kanker.krishi_upaj_samiti_kanker",
+   "old_name": "Kanker APMC",
+   "new_name": "KRISHI UPAJ MANDI SAMITI (APMC) KANKER",
+   "district": "Kanker",
+   "why": "same-day same-price handover",
+   "old_range": "2018-11-20..2026-07-08",
+   "old_days": 2387,
+   "old_rows": 2716,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2026-06-01..2026-11-13",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 20,
+   "shared_crop_days": 20,
+   "same_price": 20
+  },
+  {
+   "old": "mp.hoshangabad.babai",
+   "new": "mp.narmadapuram.babai_makhan_nagar",
+   "old_name": "Babai APMC",
+   "new_name": "Babai (Makhan Nagar) APMC",
+   "district": "Narmadapuram",
+   "why": "same-day same-price handover",
+   "old_range": "2018-11-20..2026-09-08",
+   "old_days": 1389,
+   "old_rows": 2227,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2026-08-03..2026-11-13",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 22,
+   "shared_crop_days": 26,
+   "same_price": 26
+  },
+  {
+   "old": "ap.cuddapah.cuddapah",
+   "new": "ap.ysr_kadapa.kadapa",
+   "old_name": "Cuddapah APMC",
+   "new_name": "Kadapa",
+   "district": "YSR Kadapa",
+   "why": "same-day same-price handover",
+   "old_range": "2018-11-20..2026-05-21",
+   "old_days": 844,
+   "old_rows": 1939,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2026-04-07..2026-11-13",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 29,
+   "shared_crop_days": 57,
+   "same_price": 57
+  },
+  {
+   "old": "ka.mysore.piriya_pattana",
+   "new": "ka.mysuru.periyapatna",
+   "old_name": "Piriya Pattana APMC",
+   "new_name": "Periyapatna APMC",
+   "district": "Mysuru",
+   "why": "same-day same-price handover",
+   "old_range": "2018-11-20..2026-05-27",
+   "old_days": 847,
+   "old_rows": 1769,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2026-04-01..2026-11-13",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 43,
+   "shared_crop_days": 77,
+   "same_price": 77
+  },
+  {
+   "old": "mh.buldhana.bsk_krishi_bazar_private_ltd",
+   "new": "mh.buldhana.bsk_krishi_bazar_private_limited_mehkar_dist_buldhana",
+   "old_name": "BSK Krishi Bazar Private Ltd APMC",
+   "new_name": "Bsk Krishi Bazar Private Limited, Mehkar, Dist Buldhana",
+   "district": "Buldhana",
+   "why": "same-day same-price handover",
+   "old_range": "2023-07-01..2026-05-13",
+   "old_days": 517,
+   "old_rows": 1757,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2026-04-02..2026-11-13",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 34,
+   "shared_crop_days": 100,
+   "same_price": 100
+  },
+  {
+   "old": "ka.bijapur.sindagi_indi",
+   "new": "ka.vijayapura.indi",
+   "old_name": "Sindagi(Indi) APMC",
+   "new_name": "Indi APMC",
+   "district": "Vijayapura",
+   "why": "same-day same-price handover",
+   "old_range": "2018-11-20..2026-05-27",
+   "old_days": 952,
+   "old_rows": 1457,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2026-04-08..2026-11-13",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 17,
+   "shared_crop_days": 29,
+   "same_price": 29
+  },
+  {
+   "old": "mp.shajapur.akodia",
+   "new": "mp.shajapur.akodiya",
+   "old_name": "Akodia",
+   "new_name": "Akodiya APMC",
+   "district": "Shajapur",
+   "why": "clean rename",
+   "old_range": "2018-11-20..2023-12-20",
+   "old_days": 338,
+   "old_rows": 1114,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2023-12-21..2026-11-13",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 0,
+   "shared_crop_days": 0,
+   "same_price": 0
+  },
+  {
+   "old": "mh.amarawati.shetkari_khushi_bazar",
+   "new": "mh.amarawati.shetkari_krushi_utapanna_bazar_roshankheda_tal_varud_dist_amravati",
+   "old_name": "Shetkari Khushi Bazar APMC",
+   "new_name": "Shetkari Krushi Utapanna Bazar Roshankheda Tal Varud Dist Amravati",
+   "district": "Amarawati",
+   "why": "same-day same-price handover",
+   "old_range": "2023-06-27..2026-05-08",
+   "old_days": 336,
+   "old_rows": 1085,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2026-04-21..2026-11-13",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 3,
+   "shared_crop_days": 10,
+   "same_price": 10
+  },
+  {
+   "old": "ka.chikmagalur.moodigere",
+   "new": "ka.chikkamagaluru.mudigere",
+   "old_name": "Moodigere APMC",
+   "new_name": "Mudigere APMC",
+   "district": "Chikkamagaluru",
+   "why": "same-day same-price handover",
+   "old_range": "2018-11-20..2026-05-27",
+   "old_days": 533,
+   "old_rows": 976,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2026-04-01..2026-11-13",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 47,
+   "shared_crop_days": 59,
+   "same_price": 59
+  },
+  {
+   "old": "an.north_and_middle_andaman.mayabandar",
+   "new": "an.north_and_middle_andaman.mayabander_vegetable",
+   "old_name": "Mayabandar",
+   "new_name": "Mayabander Vegetable Market",
+   "district": "North and Middle Andaman",
+   "why": "same-day same-price handover",
+   "old_range": "2023-10-26..2026-06-15",
+   "old_days": 53,
+   "old_rows": 576,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2026-06-08..2026-11-13",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 7,
+   "shared_crop_days": 53,
+   "same_price": 53
+  },
+  {
+   "old": "mh.nashik.shivsiddha_govind_producer_company_limited_sanchal",
+   "new": "mh.nashik.shivsiddha_govind_producer_company_ltd_sanchalit_khajgi_krush_utpann_bajar_samati_nashik",
+   "old_name": "Shivsiddha Govind Producer Company Limited Sanchal APMC",
+   "new_name": "Shivsiddha Govind Producer Company Ltd Sanchalit Khajgi Krush Utpann Bajar, Samati-Nashik",
+   "district": "Nashik",
+   "why": "same-day same-price handover",
+   "old_range": "2023-07-06..2026-05-13",
+   "old_days": 404,
+   "old_rows": 553,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2026-04-02..2026-11-05",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 24,
+   "shared_crop_days": 40,
+   "same_price": 40
+  },
+  {
+   "old": "mh.nashik.agriculture_produce_comitee_chandwad",
+   "new": "mh.nashik.chandwad",
+   "old_name": "AGRICULTURE PRODUCE MARKET COMITEE CHANDWAD",
+   "new_name": "APMC Chandwad",
+   "district": "Nashik",
+   "why": "same-day same-price handover",
+   "old_range": "2026-05-02..2026-09-02",
+   "old_days": 99,
+   "old_rows": 391,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2026-08-03..2026-11-13",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 25,
+   "shared_crop_days": 84,
+   "same_price": 82
+  },
+  {
+   "old": "mh.sholapur.laxmi_sopan_agriculture_produce_marketing_co_ltd",
+   "new": "mh.solapur.laxmi_sopan_agriculture_produce_marketing_co_ltd_barshi_dist_solapur",
+   "old_name": "Laxmi Sopan Agriculture Produce Marketing Co Ltd APMC",
+   "new_name": "Laxmi-Sopan Agriculture Produce Marketing Co Ltd, Barshi, Dist Solapur",
+   "district": "Solapur",
+   "why": "same-day same-price handover",
+   "old_range": "2023-06-29..2026-05-12",
+   "old_days": 379,
+   "old_rows": 379,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2026-04-02..2026-11-13",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 18,
+   "shared_crop_days": 18,
+   "same_price": 18
+  },
+  {
+   "old": "tg.hanmakonda.excise_colony_rbz_under_warangal",
+   "new": "tg.hanumakonda.excise_colony_rbz",
+   "old_name": "Excise Colony RBZ (under APMC Warangal)",
+   "new_name": "Excise Colony,RBZ",
+   "district": "Hanumakonda",
+   "why": "same-day same-price handover",
+   "old_range": "2026-05-21..2026-07-04",
+   "old_days": 35,
+   "old_rows": 357,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2026-05-21..2026-11-12",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 35,
+   "shared_crop_days": 357,
+   "same_price": 357
+  },
+  {
+   "old": "gj.surat.nizar_pumkitalov",
+   "new": "gj.surat.nizar_rumkitalav",
+   "old_name": "Nizar(Pumkitalov)",
+   "new_name": "Nizar(Rumkitalav) APMC",
+   "district": "Surat",
+   "why": "clean rename",
+   "old_range": "2024-08-20..2025-10-14",
+   "old_days": 319,
+   "old_rows": 320,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2026-03-25..2026-11-05",
+   "new_src": [
+    "resource_2"
+   ],
+   "shared_days": 0,
+   "shared_crop_days": 0,
+   "same_price": 0
+  },
+  {
+   "old": "mh.yavatmal.jagdamba_agrocare",
+   "new": "mh.yavatmal.jagdamba_agrocare_pvt_ltd_pandharkawada_dist_yeotmal",
+   "old_name": "Jagdamba Agrocare APMC",
+   "new_name": "Jagdamba Agrocare Pvt Ltd, Pandharkawada, Dist Yeotmal",
+   "district": "Yavatmal",
+   "why": "same-day same-price handover",
+   "old_range": "2023-07-07..2026-05-09",
+   "old_days": 305,
+   "old_rows": 307,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2026-04-01..2026-11-13",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 31,
+   "shared_crop_days": 31,
+   "same_price": 31
+  },
+  {
+   "old": "ap.nellore.atmakur_sps",
+   "new": "ap.spsr_nellore.atmakur_spsr_nellore_district",
+   "old_name": "Atmakur(SPS) APMC",
+   "new_name": "Atmakur (SPSR Nellore District) APMC",
+   "district": "SPSR Nellore",
+   "why": "same-day same-price handover",
+   "old_range": "2025-01-27..2026-05-14",
+   "old_days": 231,
+   "old_rows": 253,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2026-04-01..2026-11-13",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 24,
+   "shared_crop_days": 24,
+   "same_price": 24
+  },
+  {
+   "old": "mh.sholapur.perfect_krishi_yard_pvt_ltd",
+   "new": "mh.solapur.perfect_krushi_yard_tal_madha_dist_solapur",
+   "old_name": "Perfect Krishi Market Yard Pvt Ltd  APMC",
+   "new_name": "Perfect Krushi Market Yard, Tal Madha, Dist Solapur",
+   "district": "Solapur",
+   "why": "same-day same-price handover",
+   "old_range": "2025-06-05..2026-05-13",
+   "old_days": 173,
+   "old_rows": 173,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2026-04-01..2026-11-11",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 32,
+   "shared_crop_days": 32,
+   "same_price": 32
+  },
+  {
+   "old": "mh.nanded.shetkari_khajgi_bajar",
+   "new": "mh.nanded.shetkari_khajgi_bajar_parisar_tal_bhokar_dist_nanded",
+   "old_name": "Shetkari Khajgi Bajar APMC",
+   "new_name": "Shetkari Khajgi Bajar Parisar, Tal Bhokar, Dist Nanded",
+   "district": "Nanded",
+   "why": "same-day same-price handover",
+   "old_range": "2022-12-07..2026-05-07",
+   "old_days": 147,
+   "old_rows": 147,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2026-04-01..2026-11-11",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 28,
+   "shared_crop_days": 28,
+   "same_price": 28
+  },
+  {
+   "old": "mh.yavatmal.kisan_yard_tal_pusad_dist_yeotmal",
+   "new": "mh.yavatmal.kisan_yard",
+   "old_name": "Kisan Market Yard, Tal Pusad, Dist Yeotmal",
+   "new_name": "KISAN MARKET YARD",
+   "district": "Yavatmal",
+   "why": "same-day same-price handover",
+   "old_range": "2026-04-03..2026-06-20",
+   "old_days": 26,
+   "old_rows": 131,
+   "old_src": [
+    "resource_2"
+   ],
+   "new_range": "2023-07-07..2026-11-12",
+   "new_src": [
+    "resource_1",
+    "resource_2"
+   ],
+   "shared_days": 26,
+   "shared_crop_days": 130,
+   "same_price": 130
+  }
+ ]
+}

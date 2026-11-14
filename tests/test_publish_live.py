@@ -343,3 +343,27 @@ def test_crop_states_lists_only_states_with_rows():
         "live/mandi/ka.x.json": {"items": [1]},
     }
     assert pl.crop_states(files) == {"v": 1, "crops": {"onion": ["ka", "mh"], "tomato": ["ap"]}}
+
+
+def test_mandi_aliases_merge_the_old_id_and_never_loop():
+    row = lambda i, pid, merged=None: {"id": i, "public_id": pid, "name": pid.split(".")[2], "state": "Karnataka", "latitude": None,
+                                       "longitude": None, "merged_into_id": merged, "status": "MERGED" if merged else "ACTIVE"}
+    rows = [row(1, "ka.mysuru.mysuru"), row(2, "ka.mysore.mysore_bandipalya"), row(3, "ka.mysore.hunsur", 4), row(4, "ka.mysuru.hunsur")]
+    out = pl.apply_mandi_aliases(rows, {"ka.mysore.mysore_bandipalya": "ka.mysuru.mysuru", "ka.mysore.hunsur": "ka.mysuru.mysuru",
+                                        "ka.mysuru.hunsur": "ka.mysore.hunsur"})
+    assert out[1]["merged_into_id"] == 1 and out[1]["status"] == "MERGED"
+    assert out[2]["merged_into_id"] == 4  # an existing merge is kept
+    assert out[3]["merged_into_id"] is None  # its target leads back to it: skipped
+    assert rows[1]["merged_into_id"] is None  # the fetched rows are not changed in place
+    cat = pl.build_catalogs(mandis=out, crops=CROPS, varieties=VARIETIES, codes={"Karnataka": "ka"}, registry={"crops": {}, "varieties": {}})
+    listed = {m["id"]: m for m in cat["catalog/mandis.json"]["mandis"]}
+    assert listed["ka.mysore.mysore_bandipalya"]["merged_into_id"] == "ka.mysuru.mysuru"
+
+
+def test_shipped_mandi_aliases_file_is_well_formed():
+    import json as j
+    from pathlib import Path
+    data = j.loads((Path(pl.__file__).parent / "mandi_aliases.json").read_text(encoding="utf-8"))
+    aliases = data["aliases"]
+    assert aliases and all(old != new and new not in aliases for old, new in aliases.items())  # one hop, no chains
+    assert set(aliases) == {p["old"] for p in data["evidence"]}

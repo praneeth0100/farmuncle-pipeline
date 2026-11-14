@@ -19,7 +19,8 @@ from datetime import date, datetime, timedelta
 
 from farmuncle_pipeline.archive.store import R2Store
 from farmuncle_pipeline.ingestion.publish_live import (
-    IST, MANIFEST_KEY, SLUGS_KEY, STATS_KEY, _encode, _fetch, _fetch_prices, _get_json, _price, assign_slugs, content_hash, slugify)
+    IST, MANIFEST_KEY, SLUGS_KEY, STATS_KEY, _encode, _fetch, _fetch_prices, _get_json, _price, apply_mandi_aliases, assign_slugs,
+    content_hash, slugify)
 
 CHART_HASHES_KEY = "meta/chart_hashes.json"
 CHART_BUDGET = 80_000  # gzipped bytes
@@ -173,7 +174,7 @@ def publish(db, store, now: datetime | None = None, facts_glob: str | None = Non
     today = now.astimezone(IST).date()
     stamp = now.astimezone(IST).isoformat(timespec="seconds")
     print("[publish_analytics] loading", flush=True)
-    mandis = _fetch(db, "mandis", "id,public_id,merged_into_id")
+    mandis = apply_mandi_aliases(_fetch(db, "mandis", "id,public_id,merged_into_id"))
     crops = _fetch(db, "crops", "id,name,merged_into_id")
     varieties = _fetch(db, "varieties", "id,crop_id,name,merged_into_id")
     reg = assign_slugs(crops, varieties, _get_json(store, SLUGS_KEY) or {})

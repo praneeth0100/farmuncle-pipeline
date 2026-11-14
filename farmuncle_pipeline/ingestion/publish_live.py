@@ -55,6 +55,30 @@ def _fetch(db, table: str, select: str, **eq) -> list[dict]:
         start += PAGE
 
 
+def apply_mandi_aliases(mandis: list[dict], aliases: dict[str, str] | None = None) -> list[dict]:
+    """The same market under a retired id (old district spelling, other transliteration) is read as merged into the current
+    one, so every step that follows merged_into_id (charts, catalog, live and home files) joins its history and stops listing
+    it apart. The reviewed list is mandi_aliases.json (old public id -> current); the warehouse and the archive are untouched.
+    A row already merged keeps its merge, and an alias whose target leads back to the old id is skipped (no loop)."""
+    if aliases is None:
+        aliases = json.loads((Path(__file__).parent / "mandi_aliases.json").read_text(encoding="utf-8"))["aliases"]
+    by_id, by_pid = {m["id"]: m for m in mandis}, {m["public_id"]: m for m in mandis}
+
+    def end(m):
+        for _ in range(10):
+            if not m.get("merged_into_id") or m["merged_into_id"] not in by_id:
+                break
+            m = by_id[m["merged_into_id"]]
+        return m
+    out = []
+    for m in mandis:
+        target = by_pid.get(aliases.get(m["public_id"], ""))
+        if target and not m.get("merged_into_id") and end(target)["id"] != m["id"]:
+            m = {**m, "status": "MERGED", "merged_into_id": target["id"]}
+        out.append(m)
+    return out
+
+
 _PRICE_COLS = "id,mandi_id,crop_id,variety_id,grade_id,price_date,modal_price,min_price,max_price,created_at,updated_at"
 
 
@@ -392,7 +416,8 @@ def publish(db, store, now: datetime | None = None, *, all_homes: bool = False, 
     print("[publish_live] reading the warehouse", flush=True)
     window, master = window_data(db, store, today - timedelta(days=WINDOW_DAYS), now)
     mandis, crops, varieties, grades = (master[t] for t in ("mandis", "crops", "varieties", "grades"))
-    codes = {r["state"]: r["code"] for r in _fetch_state_codes(db)}
+    mandis = apply_mandi_aliases(mandis)
+    codes ={r["state"]: r["code"] for r in _fetch_state_codes(db)}
     prices = archive_rows(store, today) + window
     stats = _get_json(store, STATS_KEY) or {}
     files = build_files(prices=prices, mandis=mandis, crops=crops, varieties=varieties, grades=grades,

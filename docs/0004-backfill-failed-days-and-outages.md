@@ -18,7 +18,7 @@ verify, delete it from the warehouse. On 2026-11-03 it had reached 19 Sep 2024 w
 
 ## Decision
 
-1. **Oldest date: 1 Nov 2016** (`DEFAULT_OLDEST`).
+1. **Oldest date: 1 Jan 2018** (`DEFAULT_OLDEST`; was 1 Nov 2016 until the owner set the stop on 15 Nov 2026).
 2. **A failed day never stops the run.** It is recorded `FAILED` with its reason and the next day goes on.
 3. **Three tries per day** (`MAX_TRIES_PER_DAY = 3`: the first try and two retries). After that the day stays
    `FAILED` in `archive_days` for a look and is not retried. `given_up_days` takes these days out of the retry

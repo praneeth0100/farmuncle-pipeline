@@ -150,3 +150,23 @@ def test_a_new_day_without_new_prices_rewrites_no_chart(tmp_path):
     store2.update({k: v for k, v in store.items() if not k.startswith("facts/")})
     out = pa_.publish(db(), store2, NOW + timedelta(days=1), facts_glob=glob2)
     assert out["written"] == 0  # Hubli's chart did not change, so it is not rewritten
+
+
+def test_history_under_a_retired_mandi_id_joins_the_current_chart(tmp_path, monkeypatch):
+    # The archive has 2025 under the old district spelling (id 4), 2026 under the current id (1): one chart, both years.
+    old = {"id": 4, "public_id": "ka.dharwar.hubli", "name": "Hubli APMC", "state": "Karnataka", "status": "ACTIVE", "merged_into_id": None,
+           "latitude": None, "longitude": None}
+    rows = [fact(END - timedelta(days=n), 20.0) for n in range(1, 13)] + [fact(date(2025, 3, 3) + timedelta(days=7 * n), 30.0, mandi=4) for n in range(4)]
+    store, glob = archive(tmp_path, rows)
+    base = db()
+    base.t["mandis"] = base.t["mandis"] + [old]
+    monkeypatch.setattr(pa_, "apply_mandi_aliases", lambda m: pl.apply_mandi_aliases(m, {"ka.dharwar.hubli": "ka.dharwad.hubli"}))
+    pa_.publish(base, store, NOW, facts_glob=glob)
+    chart = json.loads(gzip_or_plain(store[CHART]))
+    assert [w[1] for w in chart["weekly"][0]["weeks"]] == [30.0] * 4 and chart["lines"][0]["days"]
+    assert not [k for k in store if "ka.dharwar.hubli" in k]  # the old id gets no chart of its own
+
+
+def gzip_or_plain(data: bytes) -> str:
+    import gzip
+    return (gzip.decompress(data) if data[:2] == b"\x1f\x8b" else data).decode()

@@ -76,6 +76,31 @@ def test_chart_daily_last_365_and_weekly_before(tmp_path):
     first_daily = date.fromisoformat(chart["start"])
     last_week = date.fromisoformat(chart["weekly_start"]) + timedelta(weeks=chart["weekly"][0]["weeks"][-1][0])
     assert last_week < first_daily
+    for week, modal, lo, hi in chart["weekly"][0]["weeks"]:  # each week: [offset, avg modal, avg min, avg max]
+        assert abs(lo - (modal - 2)) < 0.011 and abs(hi - (modal + 2)) < 0.011
+
+
+def test_weekly_min_max_null_when_the_week_had_none(tmp_path):
+    rows = [fact(END - timedelta(days=n), 20.0) for n in range(1, 13)]
+    old = END - timedelta(days=500)
+    rows += [{**fact(old - timedelta(days=n), 20.0), "min_price": 0, "max_price": None} for n in range(7)]
+    store, glob = archive(tmp_path, rows)
+    pa_.publish(db(), store, NOW, facts_glob=glob)
+    weeks = json.loads(store[CHART])["weekly"][0]["weeks"]
+    assert weeks and all(w[1] == 20.0 and w[2:] == [None, None] for w in weeks)
+
+
+def test_over_budget_chart_drops_weekly_min_max_before_weekly_history(monkeypatch):
+    weeks = [[n, 1000.0 + n * 7.31, 900.0 + n * 3.17, 1100.0 + n * 5.53] for n in range(400)]
+    payload = {"v": 2, "lines": [], "weekly_start": "2016-01-04", "weekly": [{"variety": "x", "grade": None, "weeks": weeks}]}
+    modal_only = {**payload, "weekly": [{"variety": "x", "grade": None, "weeks": [w[:2] for w in weeks]}]}
+    size = lambda p: len(pa_.gzip.compress(pa_._encode(p)))
+    monkeypatch.setattr(pa_, "CHART_BUDGET", size(payload))
+    assert json.loads(pa_._fit("k", payload)) == payload  # within budget: untouched
+    monkeypatch.setattr(pa_, "CHART_BUDGET", size(modal_only))
+    assert json.loads(pa_._fit("k", payload)) == modal_only  # min/max go, the modal history stays
+    monkeypatch.setattr(pa_, "CHART_BUDGET", size(modal_only) - 1)
+    assert json.loads(pa_._fit("k", payload))["weekly"] == []  # then the weekly history
 
 
 def test_key_stats_takes_report_on_or_before_target_within_slack(tmp_path):

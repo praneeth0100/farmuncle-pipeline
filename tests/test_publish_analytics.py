@@ -130,9 +130,16 @@ def test_publish_writes_chart_and_stats_not_series(tmp_path):
 
 
 def test_inactive_keys_get_no_chart(tmp_path):
-    store, glob = archive(tmp_path, [fact(END - timedelta(days=n), 20.0) for n in range(1, 5)])  # 4 reports in 90 days
+    rows = [fact(END - timedelta(days=n), 20.0) for n in range(30, 34)] + [fact(END - timedelta(days=1), 20.0, mandi=3)]
+    store, glob = archive(tmp_path, rows)  # 4 reports, the latest a month ago: no price on the home screen, so no graph
     pa_.publish(db(), store, NOW, facts_glob=glob)
     assert CHART not in store
+
+
+def test_a_key_with_a_recent_price_gets_a_chart_however_few_reports(tmp_path):
+    store, glob = archive(tmp_path, [fact(END - timedelta(days=n), 20.0) for n in range(1, 5)])  # 4 reports, all this week
+    pa_.publish(db(), store, NOW, facts_glob=glob)
+    assert [line["days"] for line in json.loads(store[CHART])["lines"]][0][-1][1] == 20.0
 
 
 def test_warehouse_read_reaches_back_to_the_last_archived_day():
@@ -149,7 +156,7 @@ def test_a_new_day_without_new_prices_rewrites_no_chart(tmp_path):
     store2, glob2 = archive(tmp_path / "b", rows + [fact(END, 30.0, mandi=3)])  # a new day, but only Pune reported
     store2.update({k: v for k, v in store.items() if not k.startswith("facts/")})
     out = pa_.publish(db(), store2, NOW + timedelta(days=1), facts_glob=glob2)
-    assert out["written"] == 0  # Hubli's chart did not change, so it is not rewritten
+    assert out["written"] == 1 and store2[CHART] == store[CHART]  # only Pune's new chart; Hubli's did not change, so it is not rewritten
 
 
 def test_history_under_a_retired_mandi_id_joins_the_current_chart(tmp_path, monkeypatch):

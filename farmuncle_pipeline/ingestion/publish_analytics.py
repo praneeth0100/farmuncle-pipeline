@@ -6,7 +6,8 @@
 
 DuckDB reads facts/daily/*.parquet straight from R2 (read only) and does the heavy lifting, so years of history never
 sit in Python memory. Crop, variety and grade stay separate keys throughout. Only crop+mandi pairs with an active key
-(10+ report days in the last 90) get a chart, and a chart is written only when its content changed
+(10+ report days in the last 90, or any report in the last 14: the app shows that price, so its graph must open) get a
+chart, and a chart is written only when its content changed
 (meta/chart_hashes.json). meta/manifest.json gets analytics_built_at.
 """
 
@@ -19,8 +20,8 @@ from datetime import date, datetime, timedelta
 
 from farmuncle_pipeline.archive.store import R2Store
 from farmuncle_pipeline.ingestion.publish_live import (
-    IST, MANIFEST_KEY, SLUGS_KEY, STATS_KEY, _encode, _fetch, _fetch_prices, _get_json, _price, apply_mandi_aliases, assign_slugs,
-    content_hash, slugify)
+    IST, MANIFEST_KEY, RECENT_CROPS_DAYS, SLUGS_KEY, STATS_KEY, _encode, _fetch, _fetch_prices, _get_json, _price, apply_mandi_aliases,
+    assign_slugs, content_hash, slugify)
 
 CHART_HASHES_KEY = "meta/chart_hashes.json"
 CHART_BUDGET = 80_000  # gzipped bytes
@@ -98,7 +99,7 @@ def charts(con, end: date, stamp: str):
     cur = con.execute("""
         WITH groups AS (
             SELECT DISTINCT crop, mandi FROM prices GROUP BY crop, mandi, variety, grade
-            HAVING count(*) FILTER (WHERE d > $end - INTERVAL 90 DAY) >= $reports),
+            HAVING count(*) FILTER (WHERE d > $end - INTERVAL 90 DAY) >= $reports OR max(d) > $end - $recent),
         p AS (SELECT * FROM prices JOIN groups USING (crop, mandi)),
         daily AS (SELECT crop, mandi, variety, grade, list(struct_pack(d := d, p := modal, lo := mn, hi := mx) ORDER BY d) AS days
                   FROM p WHERE d >= $start GROUP BY ALL),
@@ -107,7 +108,7 @@ def charts(con, end: date, stamp: str):
                                 round(avg(mn), 2) AS lo, round(avg(mx), 2) AS hi
                          FROM p WHERE d < $start GROUP BY ALL) GROUP BY ALL)
         SELECT crop, mandi, variety, grade, days, weeks FROM daily FULL JOIN weekly USING (crop, mandi, variety, grade)
-        ORDER BY crop, mandi, variety, grade""", {"end": end, "start": start, "reports": ACTIVE_REPORTS})
+        ORDER BY crop, mandi, variety, grade""", {"end": end, "start": start, "reports": ACTIVE_REPORTS, "recent": RECENT_CROPS_DAYS})
     group, lines = None, []
     while batch := cur.fetchmany(2000):
         for crop, mandi, variety, grade, days, weeks in batch:

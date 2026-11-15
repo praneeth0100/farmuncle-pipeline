@@ -120,6 +120,22 @@ def recheck_recent_days(client, *, today: date, days: int = 14) -> None:
         raise ConfigError(f"Failed to reopen recent ingest_days: {exc}") from exc
 
 
+RECENT_DAYS = 3  # the last days a run fetches first when they have not arrived yet
+
+
+def work_order(missing: list[date], pending: list[date], *, today: date, recent: int = RECENT_DAYS) -> list[date]:
+    """Purpose: the order a run works in.
+    1. Days of the last `recent` days not received yet, newest first: yesterday's prices land before anything else.
+    2. Older days not received yet (a backlog after an outage), oldest first, as before.
+    3. Days reopened only to re-check (Sunday's late corrections), oldest first, with the budget that is left.
+    On 15 Nov 2026 a late Sunday run re-pulled 1-10 Nov first and never reached 11-14 Nov."""
+    cutoff = today - timedelta(days=recent)
+    fresh = sorted({d for d in missing if d >= cutoff}, reverse=True)
+    backlog = sorted({d for d in missing if d < cutoff})
+    seen = set(fresh) | set(backlog)
+    return fresh + backlog + [d for d in pending if d not in seen]
+
+
 def pending_days(client, *, before: date) -> list[date]:
     """Purpose: PENDING dates strictly before `before`, oldest first (today never has v2 data)."""
     out: list[date] = []

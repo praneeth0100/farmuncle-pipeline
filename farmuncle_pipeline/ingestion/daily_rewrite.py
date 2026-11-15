@@ -35,7 +35,8 @@ Which calendar day(s) this run targets:
     Phase 2.1 (replaces the fixed 3-day window of 2026-07-14): every date
     is a row in `ingest_days` (see `core/ingest_days.py`). Each run
     seeds the dates up to yesterday, then works through the PENDING
-    ones, oldest first, until it is out of time or day budget. A date
+    ones (missing days of the last 3 first, newest first; then older missing
+    days and Sunday's re-checks, oldest first) until it is out of time or day budget. A date
     becomes FINAL only when Resource 2 delivered it completely, so a
     day the government has not published yet, or that failed, is
     simply tried again the next night, however long that takes. On
@@ -74,6 +75,7 @@ from farmuncle_pipeline.core.batch_lifecycle import JobAlreadyRunningError
 from farmuncle_pipeline.core.ingest_days import (
     decide,
     pending_days,
+    work_order,
     recheck_recent_days,
     record_day_result,
     seed_pending_days,
@@ -162,7 +164,8 @@ def run_daily_rewrite(
     """
     Purpose:
         Run the shared Resource 2 pipeline once for every date that is
-        still PENDING in `ingest_days` (oldest first), record whether
+        still PENDING in `ingest_days` (the last 3 days first, newest
+        first; then older missing days and re-checks, oldest first), record whether
         each became FINAL, then refresh `price_cache` and check the §16
         outage-alert condition if the last date attempted failed
         entirely.
@@ -183,6 +186,7 @@ def run_daily_rewrite(
     today = today or datetime.now(_IST).date()
 
     seed_pending_days(supabase, today=today)
+    missing = pending_days(supabase, before=today)  # never received yet: these come first, newest first
     if today.weekday() == 6:  # Sunday: pick up late v2 corrections
         recheck_recent_days(supabase, today=today, days=RECHECK_DAYS)
 
@@ -190,7 +194,7 @@ def run_daily_rewrite(
     attempted = 0
     last_result = None
 
-    for target_date in pending_days(supabase, before=today):
+    for target_date in work_order(missing, pending_days(supabase, before=today), today=today):
         if attempted >= max_days or clock() - started > time_budget_seconds:
             print(f"[daily_rewrite] stopping after {attempted} date(s); the rest wait for the next run.")
             break

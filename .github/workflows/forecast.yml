@@ -1,0 +1,40 @@
+name: forecast
+
+# The 12-week price forecast for Screen 3 (forecast/{crop}/{mandi}.json), from the published chart and weather files.
+# Daily after the nightly charts; retrains (rolling backtest + final model) when the stored model is a week old.
+# Reads chart, weather and live files; writes forecast/ and meta/forecast*. Never touches facts/.
+on:
+  schedule:
+    - cron: "30 1 * * *" # 07:00 IST, after nightly.yml (02:15 IST) has rebuilt the charts
+  workflow_dispatch:
+    inputs:
+      train:
+        description: "Retrain now (backtest + model), even if the model is less than a week old"
+        type: boolean
+        default: false
+
+concurrency:
+  group: forecast
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements-forecast.txt
+
+      - name: Forecast files
+        env:
+          MANDI_R2_ACCOUNT_ID: ${{ secrets.MANDI_R2_ACCOUNT_ID }}
+          MANDI_R2_ACCESS_KEY_ID: ${{ secrets.MANDI_R2_ACCESS_KEY_ID }}
+          MANDI_R2_SECRET_ACCESS_KEY: ${{ secrets.MANDI_R2_SECRET_ACCESS_KEY }}
+          MANDI_R2_BUCKET: ${{ secrets.MANDI_R2_BUCKET }}
+          FORECAST_TRAIN: ${{ inputs.train && '1' || '' }}
+        run: python -m farmuncle_pipeline.ingestion.publish_forecast

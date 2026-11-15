@@ -277,14 +277,14 @@ def job(monkeypatch):
     return calls, results, Ctx
 
 
-def test_nightly_run_works_through_the_backlog_oldest_first(job):
+def test_nightly_run_fetches_the_last_three_days_newest_first(job):
     calls, results, Ctx = job
     db = _Db(days=[
         {"price_date": "2026-10-25", "status": "PENDING", "attempts": 0},
         {"price_date": "2026-10-24", "status": "FINAL", "attempts": 1},
     ])
     daily_rewrite.run_daily_rewrite(Ctx(db), today=D)
-    assert calls["dates"] == [date(2026, 10, 25), date(2026, 10, 26), date(2026, 10, 27)]
+    assert calls["dates"] == [date(2026, 10, 27), date(2026, 10, 26), date(2026, 10, 25)]  # yesterday first
     assert {v["status"] for v in db.days().values()} == {"FINAL"}
     assert calls["cache"] == 1
 
@@ -308,7 +308,7 @@ def test_one_failing_day_does_not_stop_the_others(job):
     db = _Db(days=[{"price_date": "2026-10-25", "status": "FINAL", "attempts": 1}])
     results[date(2026, 10, 26)] = RuntimeError("boom")
     daily_rewrite.run_daily_rewrite(Ctx(db), today=D)
-    assert calls["dates"] == [date(2026, 10, 26), date(2026, 10, 27)]
+    assert calls["dates"] == [date(2026, 10, 27), date(2026, 10, 26)]
     assert db.days()["2026-10-26"]["status"] == "PENDING"
     assert "boom" in db.days()["2026-10-26"]["last_error"]
     assert db.days()["2026-10-27"]["status"] == "FINAL"
@@ -320,7 +320,7 @@ def test_a_concurrent_run_ends_the_job_cleanly(job):
     db = _Db(days=[{"price_date": "2026-10-25", "status": "FINAL", "attempts": 1}])
     results[date(2026, 10, 26)] = JobAlreadyRunningError("running")
     daily_rewrite.run_daily_rewrite(Ctx(db), today=D)
-    assert calls["dates"] == [date(2026, 10, 26)]     # stops, does not touch the next day
+    assert calls["dates"] == [date(2026, 10, 27), date(2026, 10, 26)]     # stops at the running one, touches nothing after
     assert calls["cache"] == 0
 
 
@@ -339,7 +339,8 @@ def test_the_day_cap_limits_one_run(job):
     db = _Db(days=[{"price_date": "2026-09-01", "status": "FINAL", "attempts": 1}])
     daily_rewrite.run_daily_rewrite(Ctx(db), today=D, max_days=4)
     assert len(calls["dates"]) == 4
-    assert calls["dates"] == sorted(calls["dates"])
+    # the last 3 days newest first, then the old backlog from its oldest day
+    assert calls["dates"] == [date(2026, 10, 27), date(2026, 10, 26), date(2026, 10, 25), date(2026, 9, 2)]
 
 
 def test_sunday_reopens_the_last_two_weeks(job):
@@ -358,3 +359,15 @@ def test_a_failed_last_day_checks_the_outage_alert(job):
     daily_rewrite.run_daily_rewrite(Ctx(db), today=D)
     assert calls["alerts"] == ["bad"]
     assert db.days()["2026-10-27"]["status"] == "PENDING"
+
+
+def test_work_order_puts_days_never_received_first_newest_first_then_rechecks():
+    # 15 Nov 2026, a late Sunday run: 11-14 Nov never arrived; Sunday reopened 1-14 Nov for late corrections.
+    missing = [date(2026, 11, d) for d in (11, 12, 13, 14)]
+    pending = [date(2026, 11, d) for d in range(1, 15)]
+    order = ingest_days.work_order(missing, pending, today=date(2026, 11, 15))
+    assert order[:3] == [date(2026, 11, 14), date(2026, 11, 13), date(2026, 11, 12)]  # the last 3 days, newest first
+    assert order[3] == date(2026, 11, 11)  # an older missing day before any re-check
+    assert order[4:] == [date(2026, 11, d) for d in range(1, 11)]  # re-checks after, oldest first, none repeated
+    assert ingest_days.work_order([], pending, today=date(2026, 11, 15)) == pending  # nothing missing: re-check order as before
+

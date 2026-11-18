@@ -1,0 +1,43 @@
+name: arrivals
+
+# Arrival volumes per crop and mandi from Agmarknet (see docs/arrivals.md). Each run refreshes the newest blocks, then
+# backfills older months until its budget is spent; the next run carries on. Never touches facts/daily or the warehouse.
+on:
+  schedule:
+    - cron: "0 22 * * *" # 03:30 IST daily
+  workflow_dispatch:
+    inputs:
+      budget_minutes:
+        description: "Minutes to spend calling Agmarknet"
+        default: "300"
+      limit:
+        description: "Only the first N crop+district pairs (blank: all)"
+        default: ""
+
+concurrency:
+  group: arrivals
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -r requirements.txt
+
+      - name: Arrivals
+        env:
+          MANDI_R2_ACCOUNT_ID: ${{ secrets.MANDI_R2_ACCOUNT_ID }}
+          MANDI_R2_ACCESS_KEY_ID: ${{ secrets.MANDI_R2_ACCESS_KEY_ID }}
+          MANDI_R2_SECRET_ACCESS_KEY: ${{ secrets.MANDI_R2_SECRET_ACCESS_KEY }}
+          MANDI_R2_BUCKET: ${{ secrets.MANDI_R2_BUCKET }}
+        run: >
+          python -m farmuncle_pipeline.ingestion.publish_arrivals
+          --budget-minutes "${{ inputs.budget_minutes || '300' }}"
+          ${{ inputs.limit && format('--limit {0}', inputs.limit) || '' }}

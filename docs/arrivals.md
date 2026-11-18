@@ -59,6 +59,11 @@ A daily workflow, `.github/workflows/arrivals.yml` at 03:30 IST, spends up to 5 
 - **182 of our 196 crop × mandi pairs (93%)** matched an arrivals row.
 - Most misses were names like "Vellore RM", "Sub yard Kawai Salpura" and "Mumbai- Fruit Market". The matcher now handles those, plus a single unambiguous prefix match ("Shahpura Niwas" → Shahpura).
 
+Weekly trial, 200 random pairs, the job's own code, one call every 3 s, written only to a local folder:
+- 430 calls, no 429.
+- 198 of 200 pairs had arrivals.
+- 491 market series matched our mandis and 2 didn't: "Fruit and Vegetable Market Udhampur" and "Mandawari APMC".
+
 ## Scale and limits
 
 - **Rate limit:** four parallel callers got 429 on the weekly report, and it stayed blocked for more than 6 hours. One call every 3 s ran clean on the monthly report, so the default gap is now 3 s (`ARRIVALS_GAP_S`).

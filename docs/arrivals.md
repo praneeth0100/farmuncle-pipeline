@@ -67,7 +67,7 @@ A daily workflow, `.github/workflows/arrivals.yml` at 03:30 IST, spends up to 5 
 
 | | Calls | At 1 every 3 s |
 |---|---|---|
-| Full weekly backfill, 2018 → today (12,887 × 212) | about 2.7M | about 9 days of nonstop calls per 300k, so many months of 5-hour runs |
+| Full weekly backfill, 2018 → today (12,887 × 212) | about 2.7M | about 94 days nonstop (about 450 five-hour runs); less as never-traded pairs go quiet |
 | Refresh every pair once | about 13,000 | about 11 hours |
 
 A 5-hour run makes about 6,000 calls. Every pair's newest block is therefore refreshed about every 2 days, and backfill only gets the time that's left. Recent months fill first because backfill goes newest first.

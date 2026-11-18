@@ -32,7 +32,7 @@ API = "https://api.agmarknet.gov.in/v1"
 WEEKLY = API + "/price-trend/wholesale-arrivals-weekly"
 FILTERS = API + "/daily-price-arrival/filters"
 START_YEAR = 2018
-GAP_S = float(os.environ.get("ARRIVALS_GAP_S", "1.0"))  # the server answers 429 to bursts; one call a second by default
+GAP_S = float(os.environ.get("ARRIVALS_GAP_S", "3.0"))  # 4 parallel callers got 429 for hours; 1 call / 3 s ran clean
 BACKOFF_S = (60, 180, 600)  # waits after a 429 before giving up on the run (what was fetched is still saved)
 QUIET_AFTER = 6  # calls with no market at all: the crop isn't traded there; check its newest block weekly, skip backfill
 SAVE_EVERY_S = 600
@@ -40,7 +40,8 @@ MONTHS = {m.lower(): i for i, m in enumerate(calendar.month_abbr) if m}
 STATE_ALIAS = {"keralam": "kerala", "puducherry": "pondicherry"}
 DISTRICT_ALIAS = {"tn.thiruvarur": "Tiruvarur", "cg.janjgir": "Janjgeer-Champa", "ka.bangalore": "Bengaluru"}
 _COLUMN = re.compile(r"arrivals_(\d+)_\d+_([a-z]+)_(\d{4})$")
-_NOISE = re.compile(r"\s*\b(apmc|mandi|market|f\s*&?\s*v|grain|sandhai|committee)\b\s*")  # as identity_client._MANDI_NOISE
+# identity_client._MANDI_NOISE plus words Agmarknet's report adds ("Vellore RM", "Sub yard Kawai Salpura", "Mumbai- Fruit Market")
+_NOISE = re.compile(r"\s*\b(apmc|mandi|market|f\s*&?\s*v|grain|sandhai|committee|rm|sub\s*yard|fruit)\b\s*")
 
 
 class RateLimited(Exception):
@@ -65,6 +66,15 @@ def parse_column(key: str) -> int | None:
 
 def market_key(name: str) -> str:
     return slugify(_NOISE.sub(" ", re.sub(r"[()]", " ", name or "").lower()))
+
+
+def find_mandi(markets: dict[str, str], name: str) -> str | None:
+    """Exact key, else the one mandi in the district whose key starts the other's ("shahpura" ~ "shahpura_niwas")."""
+    k = market_key(name)
+    if k in markets:
+        return markets[k]
+    near = {mid for key, mid in markets.items() if k and key and (k.startswith(key + "_") or key.startswith(k + "_"))}
+    return near.pop() if len(near) == 1 else None
 
 
 def market_index(mandis: list[dict]) -> dict[str, dict[str, str]]:
@@ -111,7 +121,7 @@ def merge(doc: dict, rows: list[dict], markets: dict[str, str]) -> int:
         name = (row.get("market") or "").strip()
         if not name or name.lower() == "total":
             continue
-        mid = markets.get(market_key(name)) or f"?{name}"
+        mid = find_mandi(markets, name) or f"?{name}"
         series = doc["markets"].setdefault(mid, [])
         for col, value in row.items():
             i = parse_column(col)

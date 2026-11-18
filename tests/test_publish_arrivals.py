@@ -114,3 +114,15 @@ def test_run_stops_on_a_rate_limit_and_keeps_what_it_fetched(monkeypatch):
     out = pa.run(store, fetch, datetime(2026, 11, 18, 9, 0, tzinfo=IST), budget_s=60, gap=0, log=lambda *a: None)
     assert out["rate_limited"] and out["calls"] == 5
     assert len(json.loads(store["arrivals/onion/mh.nashik.json"])["done"]) == 5
+
+
+def test_report_names_match_our_mandis():
+    markets = {"mumbai": "mh.mumbai.mumbai", "vellore": "tn.vellore.vellore", "shahpura": "mp.dindori.shahpura",
+               "kawai_salpura_atru": "rj.baran.kawai_salpura_atru", "lasalgaon": "a", "lasalgaon_niphad": "b"}
+    assert pa.find_mandi(markets, "Mumbai- Fruit Market") == "mh.mumbai.mumbai"
+    assert pa.find_mandi(markets, "Vellore RM") == "tn.vellore.vellore"
+    assert pa.find_mandi(markets, "Shahpura Niwas APMC") == "mp.dindori.shahpura"
+    assert pa.find_mandi(markets, "Sub yard Kawai Salpura") == "rj.baran.kawai_salpura_atru"
+    assert pa.find_mandi(markets, "Lasalgaon(Niphad) ") == "b"  # an exact key beats a prefix
+    assert pa.find_mandi(markets, "Lasalgaon(Vinchur)") == "a"
+    assert pa.find_mandi(markets, "Fulera - Kishangarh Renwal APMC") is None

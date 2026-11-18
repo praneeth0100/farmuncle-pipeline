@@ -52,19 +52,25 @@ A daily workflow, `.github/workflows/arrivals.yml` at 03:30 IST, spends up to 5 
 - Values are only ever added. A later empty answer never erases a stored number, and no market is dropped.
 - The job reads `catalog/` and `live/` files only, and never touches `facts/daily` or the warehouse.
 
-## Scale
+## Coverage (measured 18 Nov 2026)
 
-| | Calls | At 1 a second |
+100 random crop × district pairs, monthly report, one call every 3 s, no 429:
+- **95 of 100 pairs** had arrivals.
+- **182 of our 196 crop × mandi pairs (93%)** matched an arrivals row.
+- Most misses were names like "Vellore RM", "Sub yard Kawai Salpura" and "Mumbai- Fruit Market". The matcher now handles those, plus a single unambiguous prefix match ("Shahpura Niwas" → Shahpura).
+
+## Scale and limits
+
+- **Rate limit:** four parallel callers got 429 on the weekly report, and it stayed blocked for more than 6 hours. One call every 3 s ran clean on the monthly report, so the default gap is now 3 s (`ARRIVALS_GAP_S`).
+- **Client name:** the server returns 403 to Python's default `python-requests` client name. The job sends `farmuncle-pipeline (github.com/praneeth0100/farmuncle-pipeline)`.
+- **One crop per call:** the report needs one commodity per call, so calls scale with crop × district (12,887 pairs).
+
+| | Calls | At 1 every 3 s |
 |---|---|---|
-| Full backfill, 2018 → today (12,887 crop × district pairs × 212) | about 2.7M | about 31 days of 5-hour runs if every pair trades |
-| Daily refresh | about 13,000 | about 3.6 hours |
+| Full weekly backfill, 2018 → today (12,887 × 212) | about 2.7M | about 9 days of nonstop calls per 300k, so many months of 5-hour runs |
+| Refresh every pair once | about 13,000 | about 11 hours |
 
-Many pairs go quiet after 6 calls, so the real total is lower.
-
-**Rate limit:** on 18 Nov 2026, four parallel workers got 429 within a few hundred calls, and the block was still on more than an hour later. The safe pace isn't known yet.
-- `ARRIVALS_GAP_S` (default 1.0) sets the spacing between calls.
-- `--limit N` makes a small trial run.
-- Start with a trial run of a few hundred pairs and read the log before letting it run in full.
+A 5-hour run makes about 6,000 calls. Every pair's newest block is therefore refreshed about every 2 days, and backfill only gets the time that's left. Recent months fill first because backfill goes newest first.
 
 ## Not done yet
 

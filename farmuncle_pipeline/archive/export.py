@@ -139,6 +139,14 @@ def archive_day(supabase, store, day: date, written: list[dict] | None = None) -
     The day's quarantined rows go to R2 too, so deleting the window never loses a doubtful record.
     """
     quarantined = _archive_quarantine(supabase, store, day)
+    # R2 already holds a fuller copy: since the 6 Nov mandi merge a re-pull folds duplicate mandis into fewer rows, and
+    # refusing it left 22 days in the warehouse, retried and read back every night. R2's copy stays; the warehouse copy
+    # is spare and the caller deletes it. Decided from the manifest and a row count, so nothing is downloaded.
+    held = _archived_rows(store, day)
+    if held is not None:
+        count = _day_count(supabase, day)
+        if count is not None and held > count:
+            return DayArchive(day, held, 0, None, quarantined, held)
     # The rows this run just wrote, when the warehouse holds exactly that many for the day; otherwise read the day back.
     rows = written if written is not None and written and _day_count(supabase, day) == len(written) else fetch_day_rows(supabase, day)
     if not rows:

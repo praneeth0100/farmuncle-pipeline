@@ -15,7 +15,7 @@ from datetime import date, timedelta
 from farmuncle_pipeline.archive.catalog import export_catalog
 from farmuncle_pipeline.archive.export import archive_day
 from farmuncle_pipeline.archive.store import R2Store
-from farmuncle_pipeline.archive.tracker import record_day
+from farmuncle_pipeline.archive.tracker import incomplete_reason, record_day, typical_rows
 from farmuncle_pipeline.ingest_common import validate_startup
 from farmuncle_pipeline.ingestion.archive_range import final_days
 
@@ -43,6 +43,7 @@ def main() -> None:
     deleted = {r["day"] for r in db.table("archive_days").select("day").eq("status", "DELETED").execute().data or []}
     days = [d for d in days if d.isoformat() not in deleted]  # already archived and gone: nothing to copy
     copied = 0
+    typical = typical_rows(db)
     for day in days:
         try:
             result = archive_day(db, store, day)  # raises ArchiveError unless the upload is verified
@@ -51,9 +52,12 @@ def main() -> None:
             record_day(db, day, "FAILED", error=str(exc))
             continue
         if result.rows:  # a day the warehouse no longer holds is already archived; leave its record alone
-            record_day(db, day, "ARCHIVED", result=result)
+            # A thin day (a failed pull left a sliver) is copied as it is but recorded FAILED with why, so it is pulled
+            # again once it leaves the live window, as archive_aged and archive_history do (#49).
+            incomplete = incomplete_reason(result.rows, typical)
+            record_day(db, day, "FAILED" if incomplete else "ARCHIVED", result=result, error=incomplete)
             copied += 1
-            print(f"[archive_copy] {day}: {result.rows} rows copied, {result.quarantined} quarantined")
+            print(f"[archive_copy] {day}: {result.rows} rows copied, {result.quarantined} quarantined" + (f" ({incomplete})" if incomplete else ""))
     if copied:
         export_catalog(db, store)
     print(f"[archive_copy] days copied: {copied}")

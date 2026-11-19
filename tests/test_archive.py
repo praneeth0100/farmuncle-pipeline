@@ -578,3 +578,13 @@ def test_archive_day_reads_the_day_back_when_the_count_differs():
     db = _CountingDb([_row(i) for i in range(4)], count=4)  # an earlier pull left a 4th row
     result = archive_day(db, _Store(), date(2026, 10, 1), written=[_row(i) for i in range(3)])
     assert result.rows == 4 and db.downloaded
+
+
+def test_archive_day_keeps_a_fuller_r2_copy_and_downloads_nothing():
+    # A merge folded duplicate mandis, so a re-pull holds fewer rows than R2: R2 stays, the warehouse copy is spare.
+    store = _Store()
+    store.objects[manifest_key(date(2026, 11, 4))] = b'{"rows": 10}'
+    db = _CountingDb([_row(i, day="2026-11-04") for i in range(3)], count=3)
+    result = archive_day(db, store, date(2026, 11, 4))
+    assert result.rows == 10 and result.r2_rows == 10 and not db.downloaded
+    assert day_key(date(2026, 11, 4)) not in store.objects  # R2's file is left as it was
